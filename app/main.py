@@ -172,7 +172,7 @@ def build_argv(video: Path, subtitle: Path, output: Path, req: SyncRequest) -> l
     argv = [ALASS_BIN, str(video), str(subtitle), str(output)]
     no_splits = ALASS_NO_SPLITS if req.no_splits is None else req.no_splits
     if no_splits:
-        argv.append("--no-splits")
+        argv.append("--no-split")
     else:
         penalty = req.split_penalty if req.split_penalty is not None else (
             float(ALASS_SPLIT_PENALTY) if ALASS_SPLIT_PENALTY else None

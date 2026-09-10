@@ -676,6 +676,8 @@ docker exec alass-sync python -m app.bulk "/data/Movies/Foo (2019)" --apply --re
 | --- | --- | --- |
 | `root` | *(required)* | Directory to walk, e.g. `/data` or `/data/Movies` |
 | `--apply` | off | Actually re-sync. Without it, dry run |
+| `--verify` | off | Check everything against its audio, change nothing |
+| `--verify-threshold S` | `0.5` | Shift below this counts as in sync |
 | `--dry-run` | on | Explicitly ask for the default |
 | `--backup-dir DIR` | *(none)* | Copy each original subtitle here first |
 | `--languages` | *(all)* | Comma-separated language tags |
@@ -731,6 +733,33 @@ with `--redo` on that folder, or with different alass settings:
 ```bash
 docker exec alass-sync python -m app.bulk "/data/Movies/Baz" --apply --redo --no-splits
 ```
+
+### Verifying a whole library
+
+`--verify` checks every pair without touching a single file: it asks alass what
+it *would* do and classifies the answer.
+
+```bash
+docker exec alass-sync python -m app.bulk /data --verify --workers 3
+```
+
+```
+[1/527] ok      /data/Series/Show/S01E01.en.srt  shifted block of 402 subtitles ... by 0:00:00.000
+[2/527] OFF     /data/Series/Show/S01E02.en.srt  shifted block of 388 subtitles ... by 0:00:20.335
+[3/527] SUSPECT /data/Series/Show/S01E03.en.srt  3 blocks shifted by -0:00:19.474, -0:00:37.084, -0:04:26.168
+verified 527: 512 in sync, 12 out of sync, 2 suspect, 1 failed
+```
+
+| Verdict | Meaning | What to do |
+| --- | --- | --- |
+| `ok` | Shift below `--verify-threshold` (default 0.5s) | Nothing |
+| `OFF` | A real, coherent shift | `--apply` will fix it |
+| `SUSPECT` | Blocks disagree by more than 30s — alass found no coherent alignment | Do **not** apply. The subtitle probably belongs to another release |
+| `FAILED` | alass could not align at all | Replace the subtitle |
+
+Exit code is 0 only when everything is `ok`, so it works as a cron check. The
+JSON summary lists every non-`ok` file, so you can feed the paths back into
+`--include`.
 
 ### Checking that a sync is actually good
 

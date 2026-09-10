@@ -156,3 +156,54 @@ def test_limit(library: Path, capsys, monkeypatch):
     monkeypatch.setattr(bulk, "post_sync", lambda *a, **k: {"status": "ok"})
     bulk.main([str(library), "--apply", "--no-state", "--limit", "2", "--workers", "1"])
     assert json.loads(capsys.readouterr().out)["synced"] == 2
+
+
+def test_parse_shifts_handles_signs_and_multiple_blocks():
+    assert bulk.parse_shifts("shifted block of 428 subtitles with length 0:50:44.994 by 0:00:20.335") == [20.335]
+    assert bulk.parse_shifts("3 blocks shifted by -0:00:19.474, -0:00:37.084, -0:01:26.168") == [
+        -19.474, -37.084, -86.168
+    ]
+    assert bulk.parse_shifts(None) == []
+
+
+def test_verdict_classification():
+    ok = {"status": "ok", "alass_summary": "shifted block of 4 subtitles with length 0:10:00.000 by 0:00:00.000"}
+    off = {"status": "ok", "alass_summary": "shifted block of 4 subtitles with length 0:10:00.000 by 0:00:20.335"}
+    suspect = {"status": "ok", "alass_summary": "3 blocks shifted by -0:00:19.474, -0:00:37.084, -0:04:26.168"}
+    failed = {"status": "error", "error": "alass exited with code 1"}
+    assert bulk.verdict(ok, 0.5)[0] == "ok"
+    assert bulk.verdict(off, 0.5)[0] == "off"
+    assert bulk.verdict(suspect, 0.5)[0] == "suspect"
+    assert bulk.verdict(failed, 0.5)[0] == "failed"
+
+
+def test_verify_reports_without_changing_anything(library: Path, capsys, monkeypatch):
+    written = []
+    monkeypatch.setattr(bulk, "post_sync", lambda e, p, a, dry_run=False: (
+        written.append(dry_run),
+        {"status": "ok", "alass_summary": "shifted block of 9 subtitles with length 0:10:00.000 by 0:00:20.000"},
+    )[1])
+    rc = bulk.main([str(library), "--verify", "--no-state", "--workers", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1                      # something is out of sync
+    assert out["verify"] is True
+    assert out["off"] == 4 and out["ok"] == 0
+    assert all(written), "verify must only ever send dry-run requests"
+
+
+def test_verify_clean_library_exits_zero(library: Path, capsys, monkeypatch):
+    monkeypatch.setattr(bulk, "post_sync", lambda e, p, a, dry_run=False: {
+        "status": "ok", "alass_summary": "shifted block of 9 subtitles with length 0:10:00.000 by 0:00:00.010"})
+    rc = bulk.main([str(library), "--verify", "--no-state", "--workers", "1"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["ok"] == 4
+
+
+def test_backup_mirrors_media_root_not_walk_root(library: Path, tmp_path: Path, monkeypatch, capsys):
+    """A run scoped to one folder must back up into the same tree as a full run."""
+    monkeypatch.setattr(bulk, "MEDIA_ROOT", library)
+    monkeypatch.setattr(bulk, "post_sync", lambda *a, **k: {"status": "ok"})
+    backups = tmp_path / "b"
+    season = library / "TV" / "Bar" / "Season 01"
+    bulk.main([str(season), "--apply", "--no-state", "--backup-dir", str(backups), "--workers", "1"])
+    assert (backups / "TV" / "Bar" / "Season 01" / "Bar - S01E01.en.srt").exists()

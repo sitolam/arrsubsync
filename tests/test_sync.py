@@ -202,3 +202,20 @@ def test_speed_optimization_and_fps_flags_reach_alass(env):
     assert "--speed-optimization" in seen[0]
     assert seen[0][seen[0].index("--speed-optimization") + 1] == "0.0"
     assert "--disable-fps-guessing" in seen[0]
+
+
+def test_no_splits_uses_the_flag_alass_actually_has(env):
+    """alass calls it --no-split (singular); --no-splits makes it exit 1."""
+    main, client, video, subtitle, _ = env
+    seen: list[list[str]] = []
+    original = main.run_alass
+
+    async def spy(argv):
+        seen.append(argv)
+        return await original(argv)
+
+    main.run_alass = spy
+    client.post("/sync", json={"video": str(video), "subtitle": str(subtitle),
+                               "no_splits": True, "dry_run": True})
+    assert "--no-split" in seen[0]
+    assert "--no-splits" not in seen[0]

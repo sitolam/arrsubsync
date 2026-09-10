@@ -19,6 +19,7 @@ import argparse
 import concurrent.futures
 import fnmatch
 import json
+import re
 import os
 import shutil
 import sys
@@ -32,6 +33,7 @@ from typing import Any, Iterator
 VIDEO_SUFFIXES = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".webm", ".mpg", ".mpeg", ".wmv"}
 SUBTITLE_SUFFIXES = {".srt", ".ssa", ".ass", ".idx"}
 DEFAULT_STATE = "/data/.alass-sync-bulk-state.json"
+MEDIA_ROOT = Path(os.environ.get("MEDIA_ROOT", "/data"))
 
 
 @dataclass
@@ -48,6 +50,15 @@ class Pair:
         rest = self.subtitle.name[len(self.video.stem):]
         rest = rest[: -len(self.subtitle.suffix)] if self.subtitle.suffix else rest
         return [t for t in rest.split(".") if t]
+
+
+@dataclass
+class Verdicts:
+    ok: int = 0
+    off: int = 0
+    suspect: int = 0
+    failed: int = 0
+    details: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -104,8 +115,10 @@ def fingerprint(p: Path) -> str:
     return f"{st.st_size}:{int(st.st_mtime)}"
 
 
-def post_sync(endpoint: str, pair: Pair, args: argparse.Namespace) -> dict[str, Any]:
+def post_sync(endpoint: str, pair: Pair, args: argparse.Namespace, dry_run: bool = False) -> dict[str, Any]:
     payload: dict[str, Any] = {"video": str(pair.video), "subtitle": str(pair.subtitle)}
+    if dry_run:
+        payload["dry_run"] = True
     if args.split_penalty is not None:
         payload["split_penalty"] = args.split_penalty
     if args.no_splits:
@@ -130,10 +143,50 @@ def post_sync(endpoint: str, pair: Pair, args: argparse.Namespace) -> dict[str, 
         return {"status": "error", "error": repr(exc)}
 
 
+SHIFT_RE = re.compile(r"(-?)(\d+):(\d\d):(\d\d(?:\.\d+)?)")
+
+
+def parse_shifts(summary: str | None) -> list[float]:
+    """Pull the per-block shifts, in seconds, out of an alass summary line."""
+    if not summary:
+        return []
+    tail = summary.split(" by ", 1)[-1] if " by " in summary else summary
+    shifts = []
+    for sign, h, m, sec in SHIFT_RE.findall(tail):
+        value = int(h) * 3600 + int(m) * 60 + float(sec)
+        shifts.append(-value if sign == "-" else value)
+    return shifts
+
+
+def verdict(result: dict[str, Any], threshold: float) -> tuple[str, str]:
+    """Classify one dry-run result as ok / off / suspect / failed."""
+    if result.get("status") != "ok":
+        return "failed", str(result.get("error", "unknown error"))
+    shifts = parse_shifts(result.get("alass_summary"))
+    if not shifts:
+        return "ok", "nothing to do"
+    worst = max(abs(v) for v in shifts)
+    spread = max(shifts) - min(shifts)
+    detail = result.get("alass_summary", "")
+    if worst < threshold:
+        return "ok", detail
+    # Blocks pulling in very different directions means alass found no coherent
+    # alignment - the subtitle probably does not belong to this audio.
+    if len(shifts) > 1 and spread > 30:
+        return "suspect", detail
+    return "off", detail
+
+
 def back_up(pair: Pair, root: Path, backup_dir: Path) -> None:
-    try:
-        relative = pair.subtitle.relative_to(root)
-    except ValueError:
+    # Mirror the media root, not the walk root, so backups from a run scoped to
+    # one folder land in the same tree as backups from a full-library run.
+    for base in (MEDIA_ROOT, root):
+        try:
+            relative = pair.subtitle.relative_to(base)
+            break
+        except ValueError:
+            continue
+    else:
         relative = Path(pair.subtitle.name)
     target = backup_dir / relative
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -166,6 +219,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="List what would be synced (default)")
     mode.add_argument("--apply", action="store_true", help="Actually re-sync and replace files")
+    mode.add_argument("--verify", action="store_true",
+                      help="Check every subtitle against its audio without changing anything")
+    parser.add_argument("--verify-threshold", type=float, default=0.5,
+                        help="Seconds of shift below which a subtitle counts as in sync (default 0.5)")
     parser.add_argument("--endpoint", default="http://127.0.0.1:8765", help="alass-sync base URL")
     parser.add_argument("--backup-dir", type=Path, help="Copy each original subtitle here first")
     parser.add_argument("--state", type=Path, default=Path(DEFAULT_STATE),
@@ -189,7 +246,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="alass -g: do not guess/correct a framerate difference")
     args = parser.parse_args(argv)
 
-    args.apply = args.apply and not args.dry_run
+    args.apply = args.apply and not args.dry_run and not args.verify
     args.languages = {t.strip().lower() for t in args.languages.split(",") if t.strip()}
     args.skip_tags = {t.strip().lower() for t in args.skip_tags.split(",") if t.strip()}
     if args.no_state:
@@ -216,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
             totals.skipped_filter += 1
             continue
         key = str(pair.subtitle)
-        if not args.redo and state.get(key, {}).get("fingerprint") == fingerprint(pair.subtitle):
+        if not args.redo and not args.verify and state.get(key, {}).get("fingerprint") == fingerprint(pair.subtitle):
             totals.skipped_done += 1
             continue
         pairs.append(pair)
@@ -228,6 +285,36 @@ def main(argv: list[str] | None = None) -> int:
         f"{totals.skipped_done} already done, {len(pairs)} to process",
         file=sys.stderr,
     )
+
+    if args.verify:
+        counts = Verdicts()
+        total = len(pairs)
+        done = 0
+
+        def check(pair: Pair) -> tuple[Pair, dict[str, Any]]:
+            request = argparse.Namespace(**vars(args))
+            return pair, post_sync(args.endpoint, pair, request, dry_run=True)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
+            for pair, result in pool.map(check, pairs):
+                done += 1
+                state_name, detail = verdict(result, args.verify_threshold)
+                setattr(counts, state_name, getattr(counts, state_name) + 1)
+                if state_name != "ok":
+                    counts.details.append(
+                        {"status": state_name, "subtitle": str(pair.subtitle), "detail": detail}
+                    )
+                marker = {"ok": "ok     ", "off": "OFF    ", "suspect": "SUSPECT", "failed": "FAILED "}[state_name]
+                print(f"[{done}/{total}] {marker} {pair.subtitle}  {detail}", file=sys.stderr)
+
+        print(
+            f"\nverified {total}: {counts.ok} in sync, {counts.off} out of sync, "
+            f"{counts.suspect} suspect, {counts.failed} failed",
+            file=sys.stderr,
+        )
+        json.dump({"verify": True, **counts.__dict__}, sys.stdout, default=str)
+        print()
+        return 1 if (counts.off or counts.suspect or counts.failed) else 0
 
     if not args.apply:
         for pair in pairs:
