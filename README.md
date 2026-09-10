@@ -17,6 +17,24 @@ same media volume, so nothing is uploaded — files are handled by path.
 can mount. Nothing else — no database, no queue, no auth, no changes to the
 Bazarr image.
 
+## Contents
+
+- [Quick start](#quick-start)
+- [Why not Bazarr's built-in sync?](#why-not-bazarrs-built-in-sync)
+- [API](#api) — [`POST /sync`](#post-sync), [`GET /health`](#get-health)
+- [Configuration](#configuration)
+- [Install into an existing *arr stack](#install-into-an-existing-arr-stack)
+- [Image tags](#image-tags)
+- [Wire it into Bazarr](#wire-it-into-bazarr)
+- [Verify it end to end](#verify-it-end-to-end)
+- [Troubleshooting](#troubleshooting)
+- [**Bulk re-sync your existing library**](#bulk-re-sync-your-existing-library)
+  — [dry run](#step-1--dry-run), [backups](#backups-and-restoring),
+  [resuming](#resuming-and-running-it-again-later),
+  [speed](#speed-and-load), [filters](#filtering-what-gets-touched),
+  [all options](#all-options), [failures](#when-a-subtitle-fails)
+- [Development](#development)
+
 ## Quick start
 
 Add one service to your `docker-compose.yml`, next to Bazarr. Nothing to clone,
@@ -389,11 +407,35 @@ The two containers disagree about paths. Both must mount the media the same way
 ## Bulk re-sync your existing library
 
 Bazarr's post-processing hook only fires for subtitles it downloads **from now
-on**. To re-align subtitles you already have, the image ships a walker that
-pairs each video with the subtitles next to it and pushes every pair through
-the same `/sync` endpoint.
+on**. To re-align the subtitles you already have, the image ships a walker:
+`app.bulk` pairs each video with the subtitles sitting next to it and pushes
+every pair through the same `/sync` endpoint, so the alignment is identical to
+what the hook does.
 
-Look first — nothing is touched without `--apply`:
+It runs inside the container, where `/data` is your library:
+
+```bash
+docker exec alass-sync python -m app.bulk --help
+```
+
+### The short version
+
+```bash
+# 1. look - nothing is modified without --apply
+docker exec alass-sync python -m app.bulk /data
+
+# 2. try five files, keeping the originals
+docker exec alass-sync python -m app.bulk /data --apply --limit 5 \
+  --backup-dir /data/.alass-backups
+
+# 3. check those five in a player, then let it run
+docker exec alass-sync python -m app.bulk /data --apply \
+  --backup-dir /data/.alass-backups
+```
+
+### Step 1 — dry run
+
+The default mode lists every pair it would touch and changes nothing:
 
 ```bash
 docker exec alass-sync python -m app.bulk /data
@@ -402,77 +444,287 @@ docker exec alass-sync python -m app.bulk /data
 ```
 412 subtitle(s) found, 37 filtered out, 0 already done, 375 to process
 would sync /data/Movies/Foo (2019)/Foo (2019).en.srt  (against Foo (2019).mkv)
+would sync /data/TV/Bar/Season 01/Bar - S01E01.en.srt  (against Bar - S01E01.mkv)
 ...
 Dry run. Nothing was changed. Re-run with --apply to do it.
+{"dry_run": true, "would_sync": 375, "considered": 412, "skipped_done": 0, "skipped_filter": 37, "synced": 0, "failed": 0, "failures": []}
 ```
 
-Then do it, keeping every original:
+Read the header line before going further:
+
+| Number | Meaning |
+| --- | --- |
+| `subtitle(s) found` | Subtitles that were successfully paired with a video |
+| `filtered out` | Excluded by `--skip-tags` (`forced` by default), `--languages`, `--include`/`--exclude` |
+| `already done` | Recorded in the state file by an earlier run |
+| `to process` | What `--apply` would actually work on |
+
+If `found` is far lower than the number of subtitles you know you have, the
+pairing is not matching your layout — see
+[How videos and subtitles are paired](#how-videos-and-subtitles-are-paired).
+
+Narrow the dry run to check a subset before committing to it:
 
 ```bash
-docker exec alass-sync python -m app.bulk /data \
-  --apply --backup-dir /data/.alass-backups
+docker exec alass-sync python -m app.bulk "/data/Movies/Foo (2019)"
+docker exec alass-sync python -m app.bulk /data --languages en --limit 20
+```
+
+### Step 2 — a small batch, with backups
+
+```bash
+docker exec alass-sync python -m app.bulk /data --apply --limit 5 \
+  --backup-dir /data/.alass-backups
 ```
 
 ```
-[1/375] ok   /data/Movies/Foo (2019)/Foo (2019).en.srt  shifted block of 812 subtitles by -0:00:11.997
-[2/375] FAIL /data/Movies/Bar/Bar.en.srt  alass exited with code 1
+412 subtitle(s) found, 37 filtered out, 0 already done, 5 to process
+[1/5] ok   /data/Movies/Foo (2019)/Foo (2019).en.srt  shifted block of 812 subtitles with length 1:38:12.000 by -0:00:11.997
+[2/5] ok   /data/TV/Bar/Season 01/Bar - S01E01.en.srt  shifted block of 402 subtitles with length 0:41:07.000 by 0:00:02.140
+[3/5] FAIL /data/Movies/Baz/Baz.en.srt  alass exited with code 1
+...
+done in 94.2s: 4 synced, 1 failed, 0 already done, 37 filtered
+{"dry_run": false, "elapsed_seconds": 94.2, "considered": 412, ...}
 ```
 
-Progress goes to stderr, a JSON summary to stdout, and the exit code is
-non-zero if anything failed.
+Now open a couple of those in a player before doing the rest. **`--backup-dir`
+is the difference between "undo" and "gone"** — see
+[Backups and restoring](#backups-and-restoring).
 
-### Do this first
+### Step 3 — the whole library
 
-- **Take a backup.** `--backup-dir` copies each original before it is replaced,
-  into a mirror of your tree (`/data/.alass-backups/Movies/...`). It never
-  overwrites an existing backup, so re-runs keep the pristine copy. Restoring is
-  a `cp` back. Without this flag the old subtitles are gone.
-- **Start narrow.** Run one folder first (`/data/Movies/Some Film`) and watch a
-  couple of results in a player before turning it loose on the whole library.
-- **It is slow.** alass takes seconds to tens of seconds per subtitle, so a
-  large library is an overnight job. `--workers` runs several at once, but the
-  service still caps concurrent alass processes at `MAX_CONCURRENCY`; raise both
-  together, and keep an eye on CPU if this box also transcodes.
-
-### Resuming
-
-Finished subtitles are recorded in `/data/.alass-sync-bulk-state.json`, so an
-interrupted run picks up where it stopped and a repeat run does nothing:
-
-```
-412 subtitle(s) found, 37 filtered out, 375 already done, 0 to process
+```bash
+docker exec alass-sync python -m app.bulk /data --apply \
+  --backup-dir /data/.alass-backups
 ```
 
-A subtitle whose size or mtime changed since (Bazarr downloaded a new one) is
-picked up again automatically. `--redo` ignores the state entirely, `--state
-PATH` moves the file, `--no-state` disables it.
+This is an overnight job on a real library: alass takes seconds to tens of
+seconds per subtitle. To keep it alive when your shell goes away, run it
+detached and log to a file:
 
-### Options
+```bash
+docker exec -d alass-sync sh -c \
+  'python -m app.bulk /data --apply --backup-dir /data/.alass-backups \
+   > /data/.alass-bulk.log 2>&1'
+
+# watch it
+docker exec alass-sync tail -f /data/.alass-bulk.log
+```
+
+Interrupting it at any point is safe — each subtitle is replaced atomically,
+and the state file means a re-run continues where it stopped.
+
+### Output, exit codes and the summary
+
+Progress goes to **stderr**, one line per subtitle, so you can watch it. The
+final line on **stdout** is a JSON summary, so you can pipe it somewhere:
+
+```bash
+docker exec alass-sync python -m app.bulk /data --apply 2>/dev/null | jq .
+```
+
+```json
+{
+  "dry_run": false,
+  "elapsed_seconds": 4471.8,
+  "considered": 412,
+  "skipped_done": 0,
+  "skipped_filter": 37,
+  "synced": 368,
+  "failed": 7,
+  "failures": [
+    {"subtitle": "/data/Movies/Baz/Baz.en.srt", "error": "alass exited with code 1"}
+  ]
+}
+```
+
+Exit code is `0` when everything worked, `1` when at least one subtitle failed,
+`2` when the directory you passed does not exist inside the container.
+
+Per-subtitle detail — the alass command line, its stderr, timings — is in the
+service's own log:
+
+```bash
+docker logs -f alass-sync
+```
+
+### Resuming, and running it again later
+
+Every finished subtitle is recorded in `/data/.alass-sync-bulk-state.json` with
+its size and mtime. So:
+
+- An interrupted run continues where it stopped.
+- Running it again does nothing:
+
+  ```
+  412 subtitle(s) found, 37 filtered out, 375 already done, 0 to process
+  ```
+
+- A subtitle that **changed** since (Bazarr replaced it with a better one) is
+  picked up again automatically.
 
 | Flag | Effect |
 | --- | --- |
-| `--apply` | Actually re-sync. Without it, dry run |
-| `--backup-dir DIR` | Copy each original subtitle here first |
-| `--languages en,nl` | Only these language tags |
-| `--include-untagged` | With `--languages`, also take `Foo.srt` with no tag |
-| `--skip-tags forced,hi` | Skip these tags (default: `forced`) |
-| `--include` / `--exclude GLOB` | Filter by path, repeatable |
-| `--limit N` | Stop after N subtitles — good for a first taste |
-| `--workers N` | Parallel requests (default 2) |
-| `--split-penalty` / `--no-splits` | Passed through to alass |
-| `--redo`, `--state PATH`, `--no-state` | Control the resume file |
-| `--endpoint URL` | Default `http://127.0.0.1:8765`, i.e. run inside the container |
+| `--redo` | Ignore the state file, sync everything again |
+| `--state PATH` | Keep the state file somewhere else |
+| `--no-state` | Do not read or write one at all |
+
+The state file lives in `/data` because that is the only volume the container
+is guaranteed to keep. It is dot-prefixed, so the walker skips it and media
+scanners ignore it.
+
+### Backups and restoring
+
+`--backup-dir` copies each original before it is replaced, into a mirror of your
+tree:
+
+```
+/data/.alass-backups/Movies/Foo (2019)/Foo (2019).en.srt
+/data/.alass-backups/TV/Bar/Season 01/Bar - S01E01.en.srt
+```
+
+It never overwrites an existing backup, so re-running keeps the **pristine**
+original rather than the last synced version.
+
+Put one file back:
+
+```bash
+docker exec alass-sync cp "/data/.alass-backups/Movies/Foo (2019)/Foo (2019).en.srt" \
+                          "/data/Movies/Foo (2019)/Foo (2019).en.srt"
+```
+
+Put everything back:
+
+```bash
+docker exec alass-sync sh -c 'cd /data/.alass-backups && cp -a . /data/'
+```
+
+When you are happy with the results, reclaim the space:
+
+```bash
+docker exec alass-sync rm -rf /data/.alass-backups
+```
+
+Without `--backup-dir` the old subtitles are simply gone. Bazarr can always
+re-download, but that costs provider hits and loses your scores.
+
+### Speed and load
+
+alass is CPU-bound and this box probably also transcodes. Two limits stack:
+
+- `--workers N` — how many requests the walker sends at once (default 2).
+- `MAX_CONCURRENCY` — how many alass processes the **service** will run at once
+  (default 2, set in the compose environment). This is the real cap; raising
+  `--workers` alone only makes requests queue.
+
+To go faster, raise both and recreate the container:
+
+```yaml
+    environment:
+      MAX_CONCURRENCY: 4
+```
+
+```bash
+docker compose up -d alass-sync
+docker exec alass-sync python -m app.bulk /data --apply --workers 4 --backup-dir /data/.alass-backups
+```
+
+To go easier on the box, drop both to 1. `--no-splits` is dramatically faster
+(pure offset, no dynamic-programming split search) if a whole batch only needs
+shifting.
+
+`ALASS_TIMEOUT` (default 120s) still applies per subtitle; a very long film with
+a low split penalty can hit it and come back as `504`.
+
+### Filtering what gets touched
+
+| Flag | Effect |
+| --- | --- |
+| `--languages en,nl` | Only subtitles tagged with these languages |
+| `--include-untagged` | With `--languages`, also take `Foo.srt`, which has no tag |
+| `--skip-tags forced,hi` | Skip these tags. Default is `forced` |
+| `--include GLOB` | Only paths matching the glob. Repeatable |
+| `--exclude GLOB` | Skip paths matching the glob. Repeatable |
+| `--limit N` | Stop after N subtitles |
+
+Tags are the dotted tokens between the video name and the extension:
+`Foo (2019).en.hi.srt` has tags `en` and `hi`.
+
+Some recipes:
+
+```bash
+# English only, films only
+docker exec alass-sync python -m app.bulk /data --apply --languages en --include '*/Movies/*'
+
+# everything except one noisy show
+docker exec alass-sync python -m app.bulk /data --apply --exclude '*/TV/Some Show/*'
+
+# a fast offset-only pass over one season
+docker exec alass-sync python -m app.bulk "/data/TV/Bar/Season 01" --apply --no-splits
+
+# retry with a higher split penalty where the default over-split
+docker exec alass-sync python -m app.bulk "/data/Movies/Foo (2019)" --apply --redo --split-penalty 15
+```
+
+### All options
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `root` | *(required)* | Directory to walk, e.g. `/data` or `/data/Movies` |
+| `--apply` | off | Actually re-sync. Without it, dry run |
+| `--dry-run` | on | Explicitly ask for the default |
+| `--backup-dir DIR` | *(none)* | Copy each original subtitle here first |
+| `--languages` | *(all)* | Comma-separated language tags |
+| `--include-untagged` | off | With `--languages`, also take untagged subtitles |
+| `--skip-tags` | `forced` | Comma-separated tags to skip |
+| `--include GLOB` | *(all)* | Only matching paths, repeatable |
+| `--exclude GLOB` | *(none)* | Skip matching paths, repeatable |
+| `--limit N` | *(none)* | Stop after N subtitles |
+| `--workers N` | `2` | Parallel requests |
+| `--timeout S` | `600` | Per-request HTTP timeout |
+| `--split-penalty` | *(alass default 7)* | Passed through to alass |
+| `--no-splits` | off | Passed through to alass: offset only, fast |
+| `--state PATH` | `/data/.alass-sync-bulk-state.json` | Resume file |
+| `--no-state` | off | Do not use a resume file |
+| `--redo` | off | Ignore the resume file |
+| `--endpoint URL` | `http://127.0.0.1:8765` | Where the service is |
 
 ### How videos and subtitles are paired
 
 A subtitle belongs to a video in the same folder when its name is the video's
-name plus a dot: `Foo (2019).mkv` claims `Foo (2019).en.srt`, `Foo (2019).srt`
-and `Foo (2019).en.hi.srt`, but not `Foo (2019) Part 2.srt`. Hidden folders
-(including the backup directory) are skipped.
+name plus a dot:
 
-That is Bazarr's own default layout. If you have Bazarr configured to store
-subtitles in a **separate folder**, this walker will not find them — sync those
-through Bazarr, or move them next to the videos.
+| Video | Claims | Does not claim |
+| --- | --- | --- |
+| `Foo (2019).mkv` | `Foo (2019).srt`, `Foo (2019).en.srt`, `Foo (2019).en.hi.srt` | `Foo (2019) Part 2.srt` |
+
+Hidden folders are skipped, which keeps `.alass-backups` out of the walk.
+Videos are matched by extension: `.mkv .mp4 .avi .m4v .mov .ts .webm .mpg .mpeg
+.wmv`; subtitles by `.srt .ssa .ass .idx`.
+
+That is Bazarr's default layout. **If you have Bazarr configured to store
+subtitles in a separate folder, this walker will not find them** — sync those
+through Bazarr, or move them next to the videos first.
+
+### When a subtitle fails
+
+A `FAIL` line names the subtitle and quotes the error. The usual causes:
+
+| Error | Cause |
+| --- | --- |
+| `alass exited with code 1` | alass found no usable alignment: the audio is a different language or cut, or the subtitle belongs to another release |
+| `alass timed out after 120s` | Long film, low split penalty. Raise `ALASS_TIMEOUT` or use `--no-splits` |
+| `subtitle is not writable by this container` | PUID/PGID mismatch on the share |
+| `unsupported subtitle format` | Not one of `.srt .ssa .ass .idx` — a `.vtt` or `.sub`, say |
+| `HTTP 400 ... does not exist` | The path moved mid-run |
+
+Failures are never partially written: the original is left exactly as it was.
+To retry just those, take the paths from the summary's `failures` and re-run
+with `--redo` on that folder, or with different alass settings:
+
+```bash
+docker exec alass-sync python -m app.bulk "/data/Movies/Baz" --apply --redo --no-splits
+```
 
 ### Note on other bulk tools
 
