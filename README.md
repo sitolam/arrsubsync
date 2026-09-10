@@ -116,8 +116,10 @@ to tens of seconds.
 }
 ```
 
-Optional fields: `split_penalty` (float), `no_splits` (bool), `dry_run` (bool — runs
-alass but leaves the original file alone).
+Optional fields: `split_penalty` (float), `no_splits` (bool),
+`speed_optimization` (float — `0` turns alass's speed shortcut off, slower but
+more accurate), `disable_fps_guessing` (bool), `dry_run` (bool — runs alass but
+leaves the original file alone).
 
 Success (`200`):
 
@@ -172,6 +174,8 @@ present; `503` otherwise. Used by the container `HEALTHCHECK`.
 | `ALASS_TIMEOUT` | `120` | Seconds before alass is killed and the request fails with `504` |
 | `ALASS_SPLIT_PENALTY` | *(unset)* | Default `--split-penalty` (alass's own default is 7) |
 | `ALASS_NO_SPLITS` | `false` | Default to `--no-splits` (fast, offset-only) |
+| `ALASS_SPEED_OPTIMIZATION` | *(alass default 1)* | `0` disables the speed shortcut: slower, more accurate |
+| `ALASS_DISABLE_FPS_GUESSING` | `false` | Stop alass correcting a framerate difference |
 | `MAX_CONCURRENCY` | `2` | Simultaneous alass runs; alass is CPU-hungry |
 | `LOG_LEVEL` | `INFO` | Log level for the JSON logs on stdout |
 
@@ -684,6 +688,8 @@ docker exec alass-sync python -m app.bulk "/data/Movies/Foo (2019)" --apply --re
 | `--timeout S` | `600` | Per-request HTTP timeout |
 | `--split-penalty` | *(alass default 7)* | Passed through to alass |
 | `--no-splits` | off | Passed through to alass: offset only, fast |
+| `--speed-optimization N` | *(alass default 1)* | `0` = slower, more accurate |
+| `--disable-fps-guessing` | off | Do not correct a framerate difference |
 | `--state PATH` | `/data/.alass-sync-bulk-state.json` | Resume file |
 | `--no-state` | off | Do not use a resume file |
 | `--redo` | off | Ignore the resume file |
@@ -725,6 +731,62 @@ with `--redo` on that folder, or with different alass settings:
 ```bash
 docker exec alass-sync python -m app.bulk "/data/Movies/Baz" --apply --redo --no-splits
 ```
+
+### Checking that a sync is actually good
+
+alass is honest about what it did, and the summary line is worth reading:
+
+```
+shifted block of 482 subtitles with length 0:52:07.391 by 0:00:00.000
+3 blocks shifted by -0:00:19.474, -0:00:37.084, -0:01:26.168
+```
+
+- **One block, near-zero shift** — already correct, nothing was wrong.
+- **One block, a real shift** — a clean constant offset. Exactly what you want.
+- **A few blocks with similar shifts** — drift from a framerate mismatch, correctly
+  absorbed. Good.
+- **Blocks with wildly different shifts, especially minutes apart** — treat with
+  suspicion. That usually means alass could not find a real alignment and settled
+  on noise.
+
+The decisive test is that a correct sync is a **fixed point**: run it again and
+alass should find nothing left to do.
+
+```bash
+docker exec alass-sync python -m app.bulk "/data/Series/Some Show/Season 01" --redo --apply
+```
+
+A second pass reporting `by 0:00:00.000` confirms it. A second pass reporting
+*another* large shift means the subtitle does not match this audio at all — and
+each further run makes it worse, because alass is realigning its own bad output.
+Restore that file from your backup and see
+[When alass cannot align a subtitle](#when-alass-cannot-align-a-subtitle).
+
+### When alass cannot align a subtitle
+
+Some pairs genuinely do not match: the subtitle is for another cut, another
+release, or occasionally the wrong episode. Symptoms are a non-converging sync
+(above) or a plain `alass exited with code 1`.
+
+Things to try, in order:
+
+```bash
+# 1. restore the original first - never stack passes on a bad result
+docker exec alass-sync cp "/data/.alass-backups/Series/.../Episode.nl.srt" \
+                          "/data/Series/.../Episode.nl.srt"
+
+# 2. accuracy over speed, and keep the timeline in one piece
+docker exec alass-sync python -m app.bulk "/data/Series/.../Season 05" \
+  --apply --redo --speed-optimization 0 --split-penalty 20
+
+# 3. offset only - if the subtitle just needs shifting, this cannot go haywire
+docker exec alass-sync python -m app.bulk "/data/Series/.../Season 05" \
+  --apply --redo --no-splits
+```
+
+If none of that converges, the subtitle is the problem, not the alignment. Delete
+it and let Bazarr fetch another one — preferably one whose release name matches
+your file — then sync that.
 
 ### Note on other bulk tools
 

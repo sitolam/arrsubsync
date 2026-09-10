@@ -166,3 +166,39 @@ def test_progress_bars_stripped(env):
     cleaned = main.clean_alass_output(noisy)
     assert "%" not in cleaned
     assert cleaned.splitlines() == ["working...", "done"]
+
+
+def test_summary_reports_every_block(env):
+    main, _, _, _, _ = env
+    text = (
+        "shifted block of 82 subtitles with length 0:10:16.932 by -0:00:19.474\n"
+        "shifted block of 281 subtitles with length 0:25:45.697 by -0:00:37.084\n"
+        "shifted block of 65 subtitles with length 0:10:49.901 by -0:01:26.168"
+    )
+    summary = main.alass_summary(text)
+    assert summary == "3 blocks shifted by -0:00:19.474, -0:00:37.084, -0:01:26.168"
+
+
+def test_summary_passes_a_single_block_through(env):
+    main, _, _, _, _ = env
+    line = "shifted block of 402 subtitles with length 0:41:07.000 by 0:00:00.000"
+    assert main.alass_summary(line) == line
+
+
+def test_speed_optimization_and_fps_flags_reach_alass(env):
+    main, client, video, subtitle, _ = env
+    seen: list[list[str]] = []
+    original = main.run_alass
+
+    async def spy(argv):
+        seen.append(argv)
+        return await original(argv)
+
+    main.run_alass = spy
+    client.post("/sync", json={
+        "video": str(video), "subtitle": str(subtitle),
+        "speed_optimization": 0, "disable_fps_guessing": True, "dry_run": True,
+    })
+    assert "--speed-optimization" in seen[0]
+    assert seen[0][seen[0].index("--speed-optimization") + 1] == "0.0"
+    assert "--disable-fps-guessing" in seen[0]

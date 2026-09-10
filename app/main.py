@@ -35,6 +35,8 @@ ALASS_BIN = os.environ.get("ALASS_BIN", "alass")
 ALASS_TIMEOUT = float(os.environ.get("ALASS_TIMEOUT", "120"))
 ALASS_SPLIT_PENALTY = os.environ.get("ALASS_SPLIT_PENALTY", "").strip()
 ALASS_NO_SPLITS = os.environ.get("ALASS_NO_SPLITS", "false").lower() in {"1", "true", "yes"}
+ALASS_SPEED_OPTIMIZATION = os.environ.get("ALASS_SPEED_OPTIMIZATION", "").strip()
+ALASS_DISABLE_FPS_GUESSING = os.environ.get("ALASS_DISABLE_FPS_GUESSING", "false").lower() in {"1", "true", "yes"}
 MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "2"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
@@ -101,6 +103,13 @@ class SyncRequest(BaseModel):
     )
     no_splits: bool | None = Field(
         default=None, description="Override: run alass --no-splits (pure time shift, much faster)."
+    )
+    speed_optimization: float | None = Field(
+        default=None,
+        description="alass -O: 0 disables the speed optimisation and aligns more accurately.",
+    )
+    disable_fps_guessing: bool | None = Field(
+        default=None, description="alass -g: do not guess/correct a framerate difference."
     )
     dry_run: bool = Field(
         default=False, description="Run alass but do not replace the original subtitle file."
@@ -170,6 +179,18 @@ def build_argv(video: Path, subtitle: Path, output: Path, req: SyncRequest) -> l
         )
         if penalty is not None:
             argv += ["--split-penalty", str(penalty)]
+
+    speed = req.speed_optimization if req.speed_optimization is not None else (
+        float(ALASS_SPEED_OPTIMIZATION) if ALASS_SPEED_OPTIMIZATION else None
+    )
+    if speed is not None:
+        argv += ["--speed-optimization", str(speed)]
+
+    no_fps_guess = (
+        ALASS_DISABLE_FPS_GUESSING if req.disable_fps_guessing is None else req.disable_fps_guessing
+    )
+    if no_fps_guess:
+        argv.append("--disable-fps-guessing")
     return argv
 
 
@@ -185,12 +206,25 @@ def clean_alass_output(text: str) -> str:
 
 
 def alass_summary(text: str) -> str | None:
-    """Pull out the line where alass reports what it actually did."""
-    for line in reversed(clean_alass_output(text).splitlines()):
-        low = line.lower()
-        if "shifted" in low or "split" in low:
-            return line
-    return None
+    """Summarise what alass did.
+
+    alass prints one "shifted block of N subtitles ... by T" line per segment,
+    so reporting only the last one hides the rest — and the spread between
+    segments is exactly what tells you whether the alignment is trustworthy.
+    """
+    lines = [
+        line
+        for line in clean_alass_output(text).splitlines()
+        if "shifted" in line.lower() or "split" in line.lower()
+    ]
+    if not lines:
+        return None
+    if len(lines) == 1:
+        return lines[0]
+    shifts = [line.rsplit(" by ", 1)[-1] for line in lines if " by " in line]
+    if len(shifts) == len(lines):
+        return f"{len(lines)} blocks shifted by " + ", ".join(shifts)
+    return " | ".join(lines)
 
 
 async def run_alass(argv: list[str]) -> tuple[int, str, str]:

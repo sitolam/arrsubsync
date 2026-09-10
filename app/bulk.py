@@ -110,6 +110,10 @@ def post_sync(endpoint: str, pair: Pair, args: argparse.Namespace) -> dict[str, 
         payload["split_penalty"] = args.split_penalty
     if args.no_splits:
         payload["no_splits"] = True
+    if args.speed_optimization is not None:
+        payload["speed_optimization"] = args.speed_optimization
+    if args.disable_fps_guessing:
+        payload["disable_fps_guessing"] = True
     body = json.dumps(payload).encode()
     request = urllib.request.Request(
         endpoint.rstrip("/") + "/sync", body, {"Content-Type": "application/json"}
@@ -179,6 +183,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=600, help="Per-request timeout in seconds")
     parser.add_argument("--split-penalty", type=float, help="Pass through to alass")
     parser.add_argument("--no-splits", action="store_true", help="Pass --no-splits to alass")
+    parser.add_argument("--speed-optimization", type=float,
+                        help="alass -O: 0 disables the speed optimisation, slower but more accurate")
+    parser.add_argument("--disable-fps-guessing", action="store_true",
+                        help="alass -g: do not guess/correct a framerate difference")
     args = parser.parse_args(argv)
 
     args.apply = args.apply and not args.dry_run
