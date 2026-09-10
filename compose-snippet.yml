@@ -1,5 +1,6 @@
 # Paste this service block into the `services:` section of your existing
-# docker-compose.yml, next to Bazarr.
+# docker-compose.yml, next to Bazarr. No need to clone this repo - the image is
+# published to GHCR for amd64 and arm64.
 #
 # Two things must match your stack:
 #
@@ -13,8 +14,7 @@
 # No ports are published: only Bazarr needs to reach this service.
 
   alass-sync:
-    build: ./alass-sync
-    # image: ghcr.io/OWNER/alass-sync:latest   # if you publish an image instead
+    image: ghcr.io/sitolam/alass-sync:latest
     container_name: alass-sync
     restart: unless-stopped
     environment:
@@ -32,6 +32,13 @@
       # default network, delete these two lines entirely - it works as is.
       - media
 
+# Pin a version instead of :latest if you prefer, e.g.
+#   image: ghcr.io/sitolam/alass-sync:1.0
+#
+# To build from source instead of pulling, clone the repo next to your compose
+# file and swap the image line for:
+#   build: ./alass-sync
+#
 # If your stack assigns static IPs on a custom subnet, use the mapping form
 # instead and pick an address that is not already taken:
 #

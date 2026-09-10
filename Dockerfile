@@ -70,6 +70,10 @@ RUN case "${TARGETARCH}" in \
 # --------------------------------------------------------------------------- #
 FROM python:3.12-slim-bookworm
 
+LABEL org.opencontainers.image.source="https://github.com/sitolam/alass-sync" \
+      org.opencontainers.image.description="Subtitle re-sync sidecar for Bazarr, powered by alass" \
+      org.opencontainers.image.licenses="MIT"
+
 # alass shells out to ffmpeg/ffprobe to extract the audio track from the video.
 COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 COPY --from=alass /alass /usr/local/bin/alass

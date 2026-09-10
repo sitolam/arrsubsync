@@ -1,5 +1,10 @@
 # alass-sync
 
+[![CI](https://github.com/sitolam/alass-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/sitolam/alass-sync/actions/workflows/ci.yml)
+[![Docker](https://github.com/sitolam/alass-sync/actions/workflows/docker.yml/badge.svg)](https://github.com/sitolam/alass-sync/actions/workflows/docker.yml)
+[![GHCR](https://img.shields.io/badge/ghcr.io-alass--sync-blue?logo=docker&logoColor=white)](https://github.com/sitolam/alass-sync/pkgs/container/alass-sync)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 A small HTTP sidecar that re-syncs subtitles with [alass](https://github.com/kaegi/alass),
 built to be called by [Bazarr](https://www.bazarr.media/)'s Custom Post-Processing hook
 in a Docker Compose `*arr` stack.
@@ -14,17 +19,12 @@ Bazarr image.
 
 ## Quick start
 
-```bash
-cd /path/to/your/stack          # the directory holding your docker-compose.yml
-git clone https://github.com/sitolam/alass-sync.git
-```
-
-Add the service (see [Install](#install-into-an-existing-arr-stack) for the two
-values you must match to your own stack):
+Add one service to your `docker-compose.yml`, next to Bazarr. Nothing to clone,
+nothing to build — the image is published for `linux/amd64` and `linux/arm64`:
 
 ```yaml
   alass-sync:
-    build: ./alass-sync
+    image: ghcr.io/sitolam/alass-sync:latest
     container_name: alass-sync
     restart: unless-stopped
     volumes:
@@ -34,7 +34,7 @@ values you must match to your own stack):
 ```
 
 ```bash
-docker compose up -d --build alass-sync
+docker compose up -d alass-sync
 docker exec bazarr curl -s http://alass-sync:8765/health
 ```
 
@@ -82,6 +82,7 @@ to tens of seconds.
 | `compose-snippet.yml` | The service block to paste into your existing `docker-compose.yml` |
 | `examples/bazarr-alass-sync.sh` | Optional shell wrapper for Bazarr, if you prefer a script over a one-liner |
 | `tests/` | pytest suite that exercises the API against a stub alass binary |
+| `.github/workflows/` | CI (pytest) and the multi-arch GHCR publish workflow |
 
 ## API
 
@@ -155,21 +156,12 @@ present; `503` otherwise. Used by the container `HEALTHCHECK`.
 
 ## Install into an existing *arr stack
 
-1. Clone this repo next to your `docker-compose.yml`:
-
-   ```bash
-   cd /path/to/your/stack
-   git clone https://github.com/sitolam/alass-sync.git
-   ```
-
-   Your stack directory then contains `docker-compose.yml` and `alass-sync/`.
-
-2. Paste the block from [`compose-snippet.yml`](compose-snippet.yml) into the
+1. Paste the block from [`compose-snippet.yml`](compose-snippet.yml) into the
    `services:` section of your `docker-compose.yml`:
 
    ```yaml
      alass-sync:
-       build: ./alass-sync
+       image: ghcr.io/sitolam/alass-sync:latest
        container_name: alass-sync
        restart: unless-stopped
        environment:
@@ -204,27 +196,52 @@ present; `503` otherwise. Used by the container `HEALTHCHECK`.
            ipv4_address: 10.0.0.42
    ```
 
-3. Build and start it:
+2. Start it:
 
    ```bash
-   docker compose up -d --build alass-sync
+   docker compose up -d alass-sync
    ```
 
-   On amd64 this downloads upstream's official `alass-linux64` binary and takes
-   under a minute. Upstream ships no arm64 binary, so on arm64 the first build
-   compiles alass from Rust source and takes several minutes.
-
-   The image is roughly 660 MB, most of it the static ffmpeg/ffprobe pair that
-   alass needs to decode the audio track (Debian's `ffmpeg` package is larger
-   still, at ~890 MB for the same image).
-
-4. Check it's alive from Bazarr's own container, which also proves the network path:
+3. Check it's alive from Bazarr's own container, which also proves the network path:
 
    ```bash
    docker exec bazarr curl -s http://alass-sync:8765/health
    ```
 
    Expect `"status": "ok"`.
+
+## Image tags
+
+Published to [`ghcr.io/sitolam/alass-sync`](https://github.com/sitolam/alass-sync/pkgs/container/alass-sync),
+multi-arch (`linux/amd64`, `linux/arm64`):
+
+| Tag | What it tracks |
+| --- | --- |
+| `latest` | The newest release |
+| `1`, `1.2`, `1.2.3` | Pin as loosely or tightly as you like |
+| `edge` / `main` | The tip of `main`, may break |
+
+Update with:
+
+```bash
+docker compose pull alass-sync && docker compose up -d alass-sync
+```
+
+### Building it yourself instead
+
+```bash
+git clone https://github.com/sitolam/alass-sync.git
+cd alass-sync
+docker build -t alass-sync .
+```
+
+Or point compose at the source with `build: ./alass-sync` in place of `image:`.
+On amd64 the build downloads upstream's official `alass-linux64` binary and
+takes under a minute. Upstream ships no arm64 binary, so on arm64 it compiles
+alass from Rust source and takes several minutes.
+
+The image is roughly 660 MB, most of it the static ffmpeg/ffprobe pair alass
+needs to decode the audio track.
 
 ## Wire it into Bazarr
 
