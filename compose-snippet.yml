@@ -1,0 +1,27 @@
+# Paste this service block into the `services:` section of your existing
+# docker-compose.yml (indentation matches the rest of the *arr stack).
+#
+# 172.39.0.14 is the next free address in servarrnetwork; .2-.13 are taken by
+# gluetun, sonarr, radarr, lidarr, bazarr, tracearr, jellyfin, jellyseerr,
+# jellyfin2, capacitarr, tracearr-db and tracearr-redis.
+#
+# No ports are published: only Bazarr needs to reach this, over the internal
+# docker network at http://alass-sync:8765.
+
+  alass-sync:
+    build: ./alass-sync
+    # image: alass-sync:latest   # use instead of `build:` if you build separately
+    container_name: alass-sync
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      MEDIA_ROOT: /data
+      ALASS_TIMEOUT: 120
+      MAX_CONCURRENCY: 2
+      LOG_LEVEL: INFO
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /mnt/video:/data
+    networks:
+      servarrnetwork:
+        ipv4_address: 172.39.0.14

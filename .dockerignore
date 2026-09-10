@@ -1,0 +1,10 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+README.md
+LICENSE
+compose-snippet.yml
+examples/
+tests
