@@ -1,27 +1,40 @@
 # Paste this service block into the `services:` section of your existing
-# docker-compose.yml (indentation matches the rest of the *arr stack).
+# docker-compose.yml, next to Bazarr.
 #
-# 172.39.0.14 is the next free address in servarrnetwork; .2-.13 are taken by
-# gluetun, sonarr, radarr, lidarr, bazarr, tracearr, jellyfin, jellyseerr,
-# jellyfin2, capacitarr, tracearr-db and tracearr-redis.
+# Two things must match your stack:
 #
-# No ports are published: only Bazarr needs to reach this, over the internal
-# docker network at http://alass-sync:8765.
+#   1. The media mount must be IDENTICAL to Bazarr's. If Bazarr has
+#      `/mnt/media:/data`, use `/mnt/media:/data` here too - then a path
+#      Bazarr reports is valid inside this container unchanged.
+#
+#   2. The network must be the one Bazarr is on, so it can reach
+#      http://alass-sync:8765 by container name.
+#
+# No ports are published: only Bazarr needs to reach this service.
 
   alass-sync:
     build: ./alass-sync
-    # image: alass-sync:latest   # use instead of `build:` if you build separately
+    # image: ghcr.io/OWNER/alass-sync:latest   # if you publish an image instead
     container_name: alass-sync
     restart: unless-stopped
     environment:
-      TZ: ${TZ}
+      TZ: ${TZ:-Etc/UTC}
       MEDIA_ROOT: /data
       ALASS_TIMEOUT: 120
       MAX_CONCURRENCY: 2
       LOG_LEVEL: INFO
     volumes:
       - /etc/localtime:/etc/localtime:ro
-      - /mnt/video:/data
+      # CHANGE THIS to the same host:container media mount Bazarr uses:
+      - /mnt/media:/data
     networks:
-      servarrnetwork:
-        ipv4_address: 172.39.0.14
+      # CHANGE THIS to the network Bazarr is on. If your compose file uses the
+      # default network, delete these two lines entirely - it works as is.
+      - media
+
+# If your stack assigns static IPs on a custom subnet, use the mapping form
+# instead and pick an address that is not already taken:
+#
+#     networks:
+#       media:
+#         ipv4_address: 10.0.0.42

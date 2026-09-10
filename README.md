@@ -8,6 +8,47 @@ Bazarr POSTs the video path and the subtitle path; the sidecar runs alass on tho
 and atomically replaces the subtitle with the aligned version. Both containers mount the
 same media volume, so nothing is uploaded — files are handled by path.
 
+**Requirements:** Docker, a Bazarr container, and a media volume both containers
+can mount. Nothing else — no database, no queue, no auth, no changes to the
+Bazarr image.
+
+## Quick start
+
+```bash
+cd /path/to/your/stack          # the directory holding your docker-compose.yml
+git clone https://github.com/sitolam/alass-sync.git
+```
+
+Add the service (see [Install](#install-into-an-existing-arr-stack) for the two
+values you must match to your own stack):
+
+```yaml
+  alass-sync:
+    build: ./alass-sync
+    container_name: alass-sync
+    restart: unless-stopped
+    volumes:
+      - /mnt/media:/data     # <- same media mount as Bazarr
+    networks:
+      - media                # <- same network as Bazarr
+```
+
+```bash
+docker compose up -d --build alass-sync
+docker exec bazarr curl -s http://alass-sync:8765/health
+```
+
+Then paste this into Bazarr → **Settings → Subtitles → Post-Processing →
+Post-processing command** (note: no quotes around the variables — Bazarr adds
+them itself):
+
+```
+curl -sS --max-time 300 -X POST http://alass-sync:8765/sync -H Content-Type:application/json -d '{"video": {{episode}}, "subtitle": {{subtitles}}}'
+```
+
+That's it. Every subtitle Bazarr downloads from then on gets re-aligned with
+alass. The rest of this README explains each piece.
+
 ## Why not Bazarr's built-in sync?
 
 Bazarr's built-in subtitle sync uses **ffsubsync**, which fits a single global
@@ -118,7 +159,7 @@ present; `503` otherwise. Used by the container `HEALTHCHECK`.
 
    ```bash
    cd /path/to/your/stack
-   git clone https://github.com/<you>/alass-sync.git
+   git clone https://github.com/sitolam/alass-sync.git
    ```
 
    Your stack directory then contains `docker-compose.yml` and `alass-sync/`.
@@ -132,23 +173,36 @@ present; `503` otherwise. Used by the container `HEALTHCHECK`.
        container_name: alass-sync
        restart: unless-stopped
        environment:
-         TZ: ${TZ}
+         TZ: ${TZ:-Etc/UTC}
          MEDIA_ROOT: /data
          ALASS_TIMEOUT: 120
          MAX_CONCURRENCY: 2
          LOG_LEVEL: INFO
        volumes:
          - /etc/localtime:/etc/localtime:ro
-         - /mnt/video:/data
+         - /mnt/media:/data      # <- same as Bazarr's media mount
        networks:
-         servarrnetwork:
-           ipv4_address: 172.39.0.14
+         - media                 # <- same network as Bazarr
    ```
 
-   `172.39.0.14` is the first free address in the `172.39.0.0/24` subnet
-   (`.2`–`.13` are in use). The media mount is identical to Bazarr's
-   `/mnt/video:/data`, so a path Bazarr reports is valid here **unchanged**.
-   No host port is published — only Bazarr needs to reach it.
+   Two things have to match your stack:
+
+   - **The media mount must be identical to Bazarr's.** If Bazarr has
+     `/mnt/media:/data`, use exactly that here. Then a path Bazarr reports is
+     valid inside this container **unchanged**, which is the whole trick — no
+     file is ever uploaded.
+   - **The network must be one Bazarr is on**, so `http://alass-sync:8765`
+     resolves by container name. If your compose file just uses the default
+     network, drop the `networks:` key entirely and it works.
+
+   If your stack pins static IPs on a custom subnet, use the mapping form and
+   pick an address that is not already taken:
+
+   ```yaml
+       networks:
+         media:
+           ipv4_address: 10.0.0.42
+   ```
 
 3. Build and start it:
 
@@ -309,7 +363,7 @@ otherwise the service returns `400` with "not writable" before touching anything
 
 **Path exists in Bazarr but `400 ... does not exist inside this container`.**
 The two containers disagree about paths. Both must mount the media the same way
-(`/mnt/video:/data`). Compare:
+(for example both `/mnt/media:/data`). Compare:
 `docker exec bazarr ls /data` versus `docker exec alass-sync ls /data`.
 
 ## Known limitation: no bulk re-sync
