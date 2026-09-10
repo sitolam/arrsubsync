@@ -47,7 +47,9 @@ curl -sS --max-time 300 -X POST http://alass-sync:8765/sync -H Content-Type:appl
 ```
 
 That's it. Every subtitle Bazarr downloads from then on gets re-aligned with
-alass. The rest of this README explains each piece.
+alass. For the subtitles you already have, see
+[Bulk re-sync your existing library](#bulk-re-sync-your-existing-library).
+The rest of this README explains each piece.
 
 ## Why not Bazarr's built-in sync?
 
@@ -77,6 +79,7 @@ to tens of seconds.
 | Path | What it is |
 | --- | --- |
 | `app/main.py` | The FastAPI service (`POST /sync`, `GET /health`) |
+| `app/bulk.py` | CLI that re-syncs an existing library through the service |
 | `Dockerfile` | Builds alass (prebuilt binary on amd64, from Rust source on arm64) + static ffmpeg + the service |
 | `requirements.txt` | Python dependencies |
 | `compose-snippet.yml` | The service block to paste into your existing `docker-compose.yml` |
@@ -383,16 +386,100 @@ The two containers disagree about paths. Both must mount the media the same way
 (for example both `/mnt/media:/data`). Compare:
 `docker exec bazarr ls /data` versus `docker exec alass-sync ls /data`.
 
-## Known limitation: no bulk re-sync
+## Bulk re-sync your existing library
 
-This only fires for subtitles Bazarr feeds into post-processing — i.e. new
-downloads/syncs from now on. It does **not** walk your existing library.
+Bazarr's post-processing hook only fires for subtitles it downloads **from now
+on**. To re-align subtitles you already have, the image ships a walker that
+pairs each video with the subtitles next to it and pushes every pair through
+the same `/sync` endpoint.
 
-Community tools such as [`bazarr-sync`](https://github.com/ajmandourah/bazarr-sync) and [`bazarr-bulk`](https://github.com/mateoradman/bazarr-bulk)
-bulk-trigger *Bazarr's own* (ffsubsync) sync through Bazarr's API; they do not know
-about this endpoint, so they would not use alass. A bulk re-sync driver that walks the
-library and calls `POST /sync` per file is a separate piece of work and is
-deliberately out of scope here.
+Look first — nothing is touched without `--apply`:
+
+```bash
+docker exec alass-sync python -m app.bulk /data
+```
+
+```
+412 subtitle(s) found, 37 filtered out, 0 already done, 375 to process
+would sync /data/Movies/Foo (2019)/Foo (2019).en.srt  (against Foo (2019).mkv)
+...
+Dry run. Nothing was changed. Re-run with --apply to do it.
+```
+
+Then do it, keeping every original:
+
+```bash
+docker exec alass-sync python -m app.bulk /data \
+  --apply --backup-dir /data/.alass-backups
+```
+
+```
+[1/375] ok   /data/Movies/Foo (2019)/Foo (2019).en.srt  shifted block of 812 subtitles by -0:00:11.997
+[2/375] FAIL /data/Movies/Bar/Bar.en.srt  alass exited with code 1
+```
+
+Progress goes to stderr, a JSON summary to stdout, and the exit code is
+non-zero if anything failed.
+
+### Do this first
+
+- **Take a backup.** `--backup-dir` copies each original before it is replaced,
+  into a mirror of your tree (`/data/.alass-backups/Movies/...`). It never
+  overwrites an existing backup, so re-runs keep the pristine copy. Restoring is
+  a `cp` back. Without this flag the old subtitles are gone.
+- **Start narrow.** Run one folder first (`/data/Movies/Some Film`) and watch a
+  couple of results in a player before turning it loose on the whole library.
+- **It is slow.** alass takes seconds to tens of seconds per subtitle, so a
+  large library is an overnight job. `--workers` runs several at once, but the
+  service still caps concurrent alass processes at `MAX_CONCURRENCY`; raise both
+  together, and keep an eye on CPU if this box also transcodes.
+
+### Resuming
+
+Finished subtitles are recorded in `/data/.alass-sync-bulk-state.json`, so an
+interrupted run picks up where it stopped and a repeat run does nothing:
+
+```
+412 subtitle(s) found, 37 filtered out, 375 already done, 0 to process
+```
+
+A subtitle whose size or mtime changed since (Bazarr downloaded a new one) is
+picked up again automatically. `--redo` ignores the state entirely, `--state
+PATH` moves the file, `--no-state` disables it.
+
+### Options
+
+| Flag | Effect |
+| --- | --- |
+| `--apply` | Actually re-sync. Without it, dry run |
+| `--backup-dir DIR` | Copy each original subtitle here first |
+| `--languages en,nl` | Only these language tags |
+| `--include-untagged` | With `--languages`, also take `Foo.srt` with no tag |
+| `--skip-tags forced,hi` | Skip these tags (default: `forced`) |
+| `--include` / `--exclude GLOB` | Filter by path, repeatable |
+| `--limit N` | Stop after N subtitles — good for a first taste |
+| `--workers N` | Parallel requests (default 2) |
+| `--split-penalty` / `--no-splits` | Passed through to alass |
+| `--redo`, `--state PATH`, `--no-state` | Control the resume file |
+| `--endpoint URL` | Default `http://127.0.0.1:8765`, i.e. run inside the container |
+
+### How videos and subtitles are paired
+
+A subtitle belongs to a video in the same folder when its name is the video's
+name plus a dot: `Foo (2019).mkv` claims `Foo (2019).en.srt`, `Foo (2019).srt`
+and `Foo (2019).en.hi.srt`, but not `Foo (2019) Part 2.srt`. Hidden folders
+(including the backup directory) are skipped.
+
+That is Bazarr's own default layout. If you have Bazarr configured to store
+subtitles in a **separate folder**, this walker will not find them — sync those
+through Bazarr, or move them next to the videos.
+
+### Note on other bulk tools
+
+Tools such as [`bazarr-sync`](https://github.com/ajmandourah/bazarr-sync) and
+[`bazarr-bulk`](https://github.com/mateoradman/bazarr-bulk) drive *Bazarr's own*
+(ffsubsync) sync through its API. They work, but they do not use alass — which
+is the point of this service. Use `app.bulk` for alass alignment.
 
 ## Development
 
