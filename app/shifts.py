@@ -1,4 +1,4 @@
-"""Parsing of alass's per-block shift reports, shared by the service and the CLI."""
+"""Parsing of alass's per-block shift reports."""
 
 from __future__ import annotations
 
@@ -21,5 +21,13 @@ def parse_shifts(summary: str | None) -> list[float]:
 
 def worst_shift(summary: str | None) -> float:
     """The largest absolute shift alass reported, or 0.0 if it reported none."""
-    shifts = parse_shifts(summary)
-    return max((abs(v) for v in shifts), default=0.0)
+    return max((abs(v) for v in parse_shifts(summary)), default=0.0)
+
+
+def describe(seconds: float) -> str:
+    """Human-readable shift, e.g. 20.3s or 4m51s."""
+    sign = "-" if seconds < 0 else ""
+    seconds = abs(seconds)
+    if seconds < 60:
+        return f"{sign}{seconds:.1f}s"
+    return f"{sign}{int(seconds // 60)}m{int(seconds % 60):02d}s"

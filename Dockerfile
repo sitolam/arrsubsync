@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# alass-sync: FastAPI sidecar + alass, for amd64 and arm64.
+# arrsubsync: FastAPI service + dashboard + alass, for amd64 and arm64.
 #
 # Upstream ships a prebuilt binary for linux/amd64 only (alass-linux64), so
 # arm64 is compiled from the Rust source in a builder stage. BuildKit only
@@ -70,8 +70,9 @@ RUN case "${TARGETARCH}" in \
 # --------------------------------------------------------------------------- #
 FROM python:3.12-slim-bookworm
 
-LABEL org.opencontainers.image.source="https://github.com/sitolam/alass-sync" \
-      org.opencontainers.image.description="Subtitle re-sync sidecar for Bazarr, powered by alass" \
+LABEL org.opencontainers.image.source="https://github.com/sitolam/arrsubsync" \
+      org.opencontainers.image.title="arrsubsync" \
+      org.opencontainers.image.description="Keeps an *arr subtitle library in sync, powered by alass" \
       org.opencontainers.image.licenses="MIT"
 
 # alass shells out to ffmpeg/ffprobe to extract the audio track from the video.
@@ -88,11 +89,15 @@ COPY app ./app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     MEDIA_ROOT=/data \
+    ARRSUBSYNC_DATA=/config \
     ALASS_BIN=alass \
-    ALASS_TIMEOUT=120 \
+    ALASS_TIMEOUT=180 \
     MAX_CONCURRENCY=2 \
     LOG_LEVEL=INFO \
     PORT=8765
+
+# The database, the session secret and your settings live here.
+VOLUME ["/config"]
 
 EXPOSE 8765
 
@@ -100,4 +105,4 @@ EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=4).status==200 else 1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8765", "--proxy-headers"]

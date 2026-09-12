@@ -86,9 +86,9 @@ jobs:
           set -euo pipefail
           docker buildx build --load --platform ${{ matrix.platform }} \
             --cache-from type=gha,scope=${{ env.PLATFORM_PAIR }} \
-            -t alass-sync:smoke .
+            -t arrsubsync:smoke .
           mkdir -p .smoke
-          docker run -d --name smoke -v "$PWD/.smoke:/data" alass-sync:smoke
+          docker run -d --name smoke -v "$PWD/.smoke:/data" -e ARRSUBSYNC_NO_AUTH=true arrsubsync:smoke
           for i in $(seq 1 30); do
             state=$(docker inspect --format '{{.State.Health.Status}}' smoke)
             [ "$state" = "healthy" ] && break
@@ -100,6 +100,10 @@ jobs:
           docker exec smoke python -c "import json,urllib.request; \
             b=json.loads(urllib.request.urlopen('http://127.0.0.1:8765/health').read()); \
             print(b); assert b['status']=='ok'"
+          docker exec smoke python -c "import urllib.request; \
+            html=urllib.request.urlopen('http://127.0.0.1:8765/').read().decode(); \
+            assert 'arrsubsync' in html, 'dashboard did not render'"
+          docker exec smoke python -m app.cli status
           docker rm -f smoke
 
       - name: Export digest
@@ -150,8 +154,8 @@ jobs:
             type=ref,event=branch
             type=edge,branch=main
           labels: |
-            org.opencontainers.image.title=alass-sync
-            org.opencontainers.image.description=Subtitle re-sync sidecar for Bazarr, powered by alass
+            org.opencontainers.image.title=arrsubsync
+            org.opencontainers.image.description=Keeps an *arr subtitle library in sync, powered by alass
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
