@@ -104,3 +104,20 @@ def test_cancel_is_not_swallowed_by_the_job_route(client):
     r = client.post("/api/jobs/cancel")
     assert r.status_code == 200
     assert "cancelled" in r.json()
+
+
+def test_scheduler_looks_at_the_last_scheduled_run(env):
+    """A manual job running more recently must not make a sweep look overdue."""
+    import time
+
+    from app import db
+
+    run = db.start_run("scheduled")
+    db.finish_run(run, "finished", {})
+    manual = db.start_run("heal")           # more recent, different kind
+    db.finish_run(manual, "finished", {})
+
+    previous = next((r for r in db.recent_runs(50)
+                     if r["kind"] == "scheduled" and r["finished"]), None)
+    assert previous is not None
+    assert time.time() - previous["finished"] < 3600, "the scheduled run is recent, so nothing is due"

@@ -42,16 +42,17 @@ CENTERED = """
 .wrap { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .box { width: min(420px, 100%); padding: 30px; }
 .logo { display:flex; align-items:center; gap:10px; font-size: 20px; font-weight: 700; margin-bottom: 6px; }
-.dot { width: 11px; height: 11px; border-radius: 50%; background: linear-gradient(135deg,var(--accent),var(--accent-2)); }
+.mark { border-radius: 8px; }
 label { display:block; margin: 16px 0 6px; font-size: 13px; color: var(--muted); }
 .err { color: var(--bad); min-height: 20px; font-size: 13px; margin-top: 12px; }
 """
 
 LOGIN_PAGE = f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>arrsubsync</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20width%3D%2264%22%20height%3D%2264%22%20role%3D%22img%22%20aria-label%3D%22arrsubsync%22%3E%20%3Cdefs%3E%20%3ClinearGradient%20id%3D%22bg%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%234f9cf9%22%2F%3E%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%237c5cff%22%2F%3E%20%3C%2FlinearGradient%3E%20%3C%2Fdefs%3E%20%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22url%28%23bg%29%22%2F%3E%20%3C%21--%20the%20audio%3A%20what%20the%20subtitle%20is%20aligned%20against%20--%3E%20%3Cg%20fill%3D%22%23fff%22%20opacity%3D%22.95%22%3E%20%3Crect%20x%3D%2213%22%20y%3D%2222%22%20width%3D%224%22%20height%3D%2210%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2221%22%20y%3D%2216%22%20width%3D%224%22%20height%3D%2222%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2229%22%20y%3D%2220%22%20width%3D%224%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2237%22%20y%3D%2213%22%20width%3D%224%22%20height%3D%2228%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2245%22%20y%3D%2219%22%20width%3D%224%22%20height%3D%2216%22%20rx%3D%222%22%2F%3E%20%3C%2Fg%3E%20%3C%21--%20the%20subtitle%2C%20sitting%20under%20it%2C%20in%20step%20--%3E%20%3Cg%20fill%3D%22%23fff%22%3E%20%3Crect%20x%3D%2213%22%20y%3D%2245%22%20width%3D%2228%22%20height%3D%225%22%20rx%3D%222.5%22%2F%3E%20%3Crect%20x%3D%2245%22%20y%3D%2245%22%20width%3D%226%22%20height%3D%225%22%20rx%3D%222.5%22%20opacity%3D%22.55%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"><title>arrsubsync</title>
 <style>{BASE_CSS}{CENTERED}</style></head><body>
 <div class="wrap"><form class="card box" onsubmit="go(event)">
-  <div class="logo"><span class="dot"></span> arrsubsync</div>
+  <div class="logo"><svg class="mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f9cf9"/><stop offset="1" stop-color="#7c5cff"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#lg)"/><g fill="#fff" opacity=".95"><rect x="13" y="22" width="4" height="10" rx="2"/><rect x="21" y="16" width="4" height="22" rx="2"/><rect x="29" y="20" width="4" height="14" rx="2"/><rect x="37" y="13" width="4" height="28" rx="2"/><rect x="45" y="19" width="4" height="16" rx="2"/></g><g fill="#fff"><rect x="13" y="45" width="28" height="5" rx="2.5"/><rect x="45" y="45" width="6" height="5" rx="2.5" opacity=".55"/></g></svg> arrsubsync</div>
   <div class="muted" style="font-size:13px">Sign in to manage your subtitle library.</div>
   <label>Username</label><input type="text" id="u" autocomplete="username" autofocus>
   <label>Password</label><input type="password" id="p" autocomplete="current-password">
@@ -71,10 +72,11 @@ async function go(ev) {{
 </script></body></html>"""
 
 SETUP_PAGE = f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>arrsubsync setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20width%3D%2264%22%20height%3D%2264%22%20role%3D%22img%22%20aria-label%3D%22arrsubsync%22%3E%20%3Cdefs%3E%20%3ClinearGradient%20id%3D%22bg%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%234f9cf9%22%2F%3E%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%237c5cff%22%2F%3E%20%3C%2FlinearGradient%3E%20%3C%2Fdefs%3E%20%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22url%28%23bg%29%22%2F%3E%20%3C%21--%20the%20audio%3A%20what%20the%20subtitle%20is%20aligned%20against%20--%3E%20%3Cg%20fill%3D%22%23fff%22%20opacity%3D%22.95%22%3E%20%3Crect%20x%3D%2213%22%20y%3D%2222%22%20width%3D%224%22%20height%3D%2210%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2221%22%20y%3D%2216%22%20width%3D%224%22%20height%3D%2222%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2229%22%20y%3D%2220%22%20width%3D%224%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2237%22%20y%3D%2213%22%20width%3D%224%22%20height%3D%2228%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2245%22%20y%3D%2219%22%20width%3D%224%22%20height%3D%2216%22%20rx%3D%222%22%2F%3E%20%3C%2Fg%3E%20%3C%21--%20the%20subtitle%2C%20sitting%20under%20it%2C%20in%20step%20--%3E%20%3Cg%20fill%3D%22%23fff%22%3E%20%3Crect%20x%3D%2213%22%20y%3D%2245%22%20width%3D%2228%22%20height%3D%225%22%20rx%3D%222.5%22%2F%3E%20%3Crect%20x%3D%2245%22%20y%3D%2245%22%20width%3D%226%22%20height%3D%225%22%20rx%3D%222.5%22%20opacity%3D%22.55%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"><title>arrsubsync setup</title>
 <style>{BASE_CSS}{CENTERED}</style></head><body>
 <div class="wrap"><form class="card box" onsubmit="go(event)">
-  <div class="logo"><span class="dot"></span> arrsubsync</div>
+  <div class="logo"><svg class="mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f9cf9"/><stop offset="1" stop-color="#7c5cff"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#lg)"/><g fill="#fff" opacity=".95"><rect x="13" y="22" width="4" height="10" rx="2"/><rect x="21" y="16" width="4" height="22" rx="2"/><rect x="29" y="20" width="4" height="14" rx="2"/><rect x="37" y="13" width="4" height="28" rx="2"/><rect x="45" y="19" width="4" height="16" rx="2"/></g><g fill="#fff"><rect x="13" y="45" width="28" height="5" rx="2.5"/><rect x="45" y="45" width="6" height="5" rx="2.5" opacity=".55"/></g></svg> arrsubsync</div>
   <div class="muted" style="font-size:13px">Choose a password for the <b>admin</b> account.
   You can also set <span class="mono">ARRSUBSYNC_PASSWORD</span> in compose instead.</div>
   <label>Password (8 characters or more)</label>
@@ -100,7 +102,7 @@ DASHBOARD_CSS = """
 }
 .top-in { max-width: 1240px; margin: 0 auto; padding: 14px 22px; display: flex; align-items: center; gap: 14px; }
 .logo { display:flex; align-items:center; gap:10px; font-size: 17px; font-weight: 700; letter-spacing:-.2px; }
-.dot { width: 11px; height: 11px; border-radius: 50%; background: linear-gradient(135deg,var(--accent),var(--accent-2)); box-shadow: 0 0 12px rgba(79,156,249,.7); }
+.mark { border-radius: 8px; box-shadow: 0 0 18px rgba(79,156,249,.35); }
 .spacer { flex: 1; }
 .pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .pill.on { color: var(--ok); border-color: #1d3a26; background: rgba(63,185,80,.08); }
@@ -142,8 +144,8 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .settings { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
 .field label { display: block; font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
 .field .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
-.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-.switch input { width: 40px; height: 22px; appearance: none; background: var(--panel-2); border-radius: 999px; position: relative; border: 1px solid var(--line); cursor: pointer; }
+.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; line-height: 1.35; }
+.switch input { flex: 0 0 40px; width: 40px; height: 22px; appearance: none; background: var(--panel-2); border-radius: 999px; position: relative; border: 1px solid var(--line); cursor: pointer; }
 .switch input:checked { background: linear-gradient(135deg,var(--accent),var(--accent-2)); border-color: transparent; }
 .switch input::after { content:''; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: .18s; }
 .switch input:checked::after { left: 20px; }
@@ -155,10 +157,11 @@ tr:hover td { background: rgba(255,255,255,.02); }
 """
 
 DASHBOARD = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>arrsubsync</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20width%3D%2264%22%20height%3D%2264%22%20role%3D%22img%22%20aria-label%3D%22arrsubsync%22%3E%20%3Cdefs%3E%20%3ClinearGradient%20id%3D%22bg%22%20x1%3D%220%22%20y1%3D%220%22%20x2%3D%221%22%20y2%3D%221%22%3E%20%3Cstop%20offset%3D%220%22%20stop-color%3D%22%234f9cf9%22%2F%3E%20%3Cstop%20offset%3D%221%22%20stop-color%3D%22%237c5cff%22%2F%3E%20%3C%2FlinearGradient%3E%20%3C%2Fdefs%3E%20%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22url%28%23bg%29%22%2F%3E%20%3C%21--%20the%20audio%3A%20what%20the%20subtitle%20is%20aligned%20against%20--%3E%20%3Cg%20fill%3D%22%23fff%22%20opacity%3D%22.95%22%3E%20%3Crect%20x%3D%2213%22%20y%3D%2222%22%20width%3D%224%22%20height%3D%2210%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2221%22%20y%3D%2216%22%20width%3D%224%22%20height%3D%2222%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2229%22%20y%3D%2220%22%20width%3D%224%22%20height%3D%2214%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2237%22%20y%3D%2213%22%20width%3D%224%22%20height%3D%2228%22%20rx%3D%222%22%2F%3E%20%3Crect%20x%3D%2245%22%20y%3D%2219%22%20width%3D%224%22%20height%3D%2216%22%20rx%3D%222%22%2F%3E%20%3C%2Fg%3E%20%3C%21--%20the%20subtitle%2C%20sitting%20under%20it%2C%20in%20step%20--%3E%20%3Cg%20fill%3D%22%23fff%22%3E%20%3Crect%20x%3D%2213%22%20y%3D%2245%22%20width%3D%2228%22%20height%3D%225%22%20rx%3D%222.5%22%2F%3E%20%3Crect%20x%3D%2245%22%20y%3D%2245%22%20width%3D%226%22%20height%3D%225%22%20rx%3D%222.5%22%20opacity%3D%22.55%22%2F%3E%20%3C%2Fg%3E%20%3C%2Fsvg%3E"><title>arrsubsync</title>
 <style>__CSS__</style></head><body>
 <div class="top"><div class="top-in">
-  <div class="logo"><span class="dot"></span> arrsubsync</div>
+  <div class="logo"><svg class="mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f9cf9"/><stop offset="1" stop-color="#7c5cff"/></linearGradient></defs><rect width="64" height="64" rx="15" fill="url(#lg)"/><g fill="#fff" opacity=".95"><rect x="13" y="22" width="4" height="10" rx="2"/><rect x="21" y="16" width="4" height="22" rx="2"/><rect x="29" y="20" width="4" height="14" rx="2"/><rect x="37" y="13" width="4" height="28" rx="2"/><rect x="45" y="19" width="4" height="16" rx="2"/></g><g fill="#fff"><rect x="13" y="45" width="28" height="5" rx="2.5"/><rect x="45" y="45" width="6" height="5" rx="2.5" opacity=".55"/></g></svg> arrsubsync</div>
   <span class="pill" id="health">checking…</span>
   <span class="pill" id="bazarrPill">Bazarr</span>
   <span class="pill" id="autoPill">auto-replace</span>
@@ -301,6 +304,7 @@ function duration(s) {
 
 function tab(name) {
   current = name;
+  if (location.hash.slice(1) !== name) history.replaceState(null, '', '#' + name);
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   ['problems', 'all', 'activity', 'settings'].forEach(t =>
     $('tab-' + t).classList.toggle('hidden', t !== name));
@@ -449,7 +453,9 @@ async function testBazarr() {
   $('bazarrTest').style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
 }
 
-refresh(); loadRows();
+tab(['problems','all','activity','settings'].includes(location.hash.slice(1))
+      ? location.hash.slice(1) : 'problems');
+refresh();
 """
 
 DASHBOARD = DASHBOARD.replace("__CSS__", BASE_CSS + DASHBOARD_CSS).replace("__JS__", DASHBOARD_JS)

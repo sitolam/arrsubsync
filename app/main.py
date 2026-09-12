@@ -57,10 +57,13 @@ async def scheduler() -> None:
             settings = db.get_settings()
             if settings.get("schedule_enabled"):
                 hours = max(0.25, float(settings.get("schedule_hours", 24)))
-                last = db.recent_runs(1)
-                due = True
-                if last and last[0]["kind"] == "scheduled" and last[0]["finished"]:
-                    due = (time.time() - last[0]["finished"]) >= hours * 3600
+                # Look at the last *scheduled* run, not merely the last run:
+                # a manual job in between must not make a sweep look overdue.
+                previous = next(
+                    (r for r in db.recent_runs(50)
+                     if r["kind"] == "scheduled" and r["finished"]), None
+                )
+                due = previous is None or (time.time() - previous["finished"]) >= hours * 3600
                 if due and not jobs.runner.busy:
                     jobs.runner.start("scheduled", jobs.full_job)
         except Exception as exc:  # noqa: BLE001 - the loop must survive anything

@@ -1,6 +1,6 @@
 <div align="center">
 
-# arrsubsync
+<img src="assets/logo.svg" alt="arrsubsync" width="340">
 
 **Your subtitle library, permanently in sync.**
 
@@ -27,6 +27,10 @@ Drop it next to Bazarr in your `*arr` stack and it takes subtitle timing off you
 | **Proves each correction** | A correct sync is a *fixed point*. It re-aligns its own result, and if that doesn't hold, it puts the original back. |
 | **Replaces what it can't fix** | Some subtitles belong to a different cut and no alignment exists. It blacklists them in Bazarr, fetches another, syncs that, and repeats until one sticks. |
 | **Shows you everything** | A dashboard with live progress, per-file status, history, and settings — behind a login. |
+
+<p align="center">
+  <img src="assets/screenshots/problems.png" alt="The arrsubsync dashboard" width="100%">
+</p>
 
 It uses [**alass**](https://github.com/kaegi/alass) (Automatic Language-Agnostic
 Subtitle Synchronization) for the alignment itself. All the judgement about
@@ -118,6 +122,21 @@ That's the whole setup.
 | **All subtitles** | The whole library, filterable by status and path. |
 | **Activity** | Corrections per day, and a live feed of everything that happened. |
 | **Settings** | Automation, Bazarr, alignment tuning, and library filters. |
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/progress.png" alt="A sweep in progress"><br>
+      <sub><b>Live progress.</b> Every job reports what it is working on, how far along it is, and what it has found so far — with a Stop button.</sub></td>
+    <td width="50%"><img src="assets/screenshots/activity.png" alt="Activity and history"><br>
+      <sub><b>History.</b> Corrections per day, and a feed of every sync, revert and replacement.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/settings.png" alt="Settings"><br>
+      <sub><b>Settings.</b> Automation, Bazarr credentials, alignment tuning and library filters — each explained in place.</sub></td>
+    <td><img src="assets/screenshots/all.png" alt="The whole library"><br>
+      <sub><b>The whole library.</b> Filter by status or path, and see what alass said about any subtitle.</sub></td>
+  </tr>
+</table>
 
 Authentication is a single account with a PBKDF2-hashed password and a signed session
 cookie. Set `ARRSUBSYNC_PASSWORD` in compose, or leave it out and choose one on first
