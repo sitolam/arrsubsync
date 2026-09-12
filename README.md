@@ -173,7 +173,9 @@ present; `503` otherwise. Used by the container `HEALTHCHECK`.
 | `ALASS_BIN` | `alass` | Path to the alass binary |
 | `ALASS_TIMEOUT` | `120` | Seconds before alass is killed and the request fails with `504` |
 | `ALASS_SPLIT_PENALTY` | *(unset)* | Default `--split-penalty` (alass's own default is 7) |
-| `ALASS_NO_SPLITS` | `false` | Default to `--no-splits` (fast, offset-only) |
+| `ALASS_NO_SPLITS` | `false` | Default to `--no-split` (fast, offset-only) |
+| `ALASS_VERIFY_AFTER` | `true` | Re-align after syncing and revert if it did not converge |
+| `ALASS_VERIFY_THRESHOLD` | `2.0` | Residual shift, in seconds, that counts as converged |
 | `ALASS_SPEED_OPTIMIZATION` | *(alass default 1)* | `0` disables the speed shortcut: slower, more accurate |
 | `ALASS_DISABLE_FPS_GUESSING` | `false` | Stop alass correcting a framerate difference |
 | `MAX_CONCURRENCY` | `2` | Simultaneous alass runs; alass is CPU-hungry |
@@ -760,6 +762,32 @@ verified 527: 512 in sync, 12 out of sync, 2 suspect, 1 failed
 Exit code is 0 only when everything is `ok`, so it works as a cron check. The
 JSON summary lists every non-`ok` file, so you can feed the paths back into
 `--include`.
+
+### The safety net: verify-after-apply
+
+Every `/sync` that replaces a file re-aligns the result and checks that alass
+has nothing left to do. A correct sync is a **fixed point**. If the second pass
+instead wants to move the subtitle by more than `ALASS_VERIFY_THRESHOLD`
+(default 2s), the sync is treated as failed, **the original is restored**, and
+the response is `409`:
+
+```json
+{
+  "status": "reverted",
+  "error": "alass did not converge: after syncing, it wanted to move the subtitle by another 291.6s. The subtitle does not match this audio, so the original was restored.",
+  "alass_summary": "shifted block of 1059 subtitles ... by -0:00:29.152",
+  "verify_summary": "shifted block of 1059 subtitles ... by -0:04:51.628"
+}
+```
+
+This is what stops a mismatched subtitle — one timed for a different cut, or
+simply the wrong release — from being silently mangled. It costs a second alass
+run per sync. Turn it off with `verify_after: false` per request or
+`ALASS_VERIFY_AFTER=false`, but there is rarely a good reason to.
+
+A clean-looking result is **not** sufficient evidence on its own: a single-block
+shift of a few seconds can still be a file alass cannot really align. Only the
+second pass tells you.
 
 ### Checking that a sync is actually good
 

@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
+from app.shifts import parse_shifts
+
 VIDEO_SUFFIXES = {".mkv", ".mp4", ".avi", ".m4v", ".mov", ".ts", ".webm", ".mpg", ".mpeg", ".wmv"}
 SUBTITLE_SUFFIXES = {".srt", ".ssa", ".ass", ".idx"}
 DEFAULT_STATE = "/data/.alass-sync-bulk-state.json"
@@ -64,6 +66,7 @@ class Verdicts:
 @dataclass
 class Totals:
     considered: int = 0
+    reverted: int = 0
     skipped_done: int = 0
     skipped_filter: int = 0
     synced: int = 0
@@ -141,21 +144,6 @@ def post_sync(endpoint: str, pair: Pair, args: argparse.Namespace, dry_run: bool
             return {"status": "error", "error": f"HTTP {exc.code}"}
     except Exception as exc:  # noqa: BLE001 - network/timeout, reported per file
         return {"status": "error", "error": repr(exc)}
-
-
-SHIFT_RE = re.compile(r"(-?)(\d+):(\d\d):(\d\d(?:\.\d+)?)")
-
-
-def parse_shifts(summary: str | None) -> list[float]:
-    """Pull the per-block shifts, in seconds, out of an alass summary line."""
-    if not summary:
-        return []
-    tail = summary.split(" by ", 1)[-1] if " by " in summary else summary
-    shifts = []
-    for sign, h, m, sec in SHIFT_RE.findall(tail):
-        value = int(h) * 3600 + int(m) * 60 + float(sec)
-        shifts.append(-value if sign == "-" else value)
-    return shifts
 
 
 def verdict(result: dict[str, Any], threshold: float) -> tuple[str, str]:
@@ -262,7 +250,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {root} is not a directory inside this container", file=sys.stderr)
         return 2
 
-    state = {} if (args.redo or args.no_state) else load_state(args.state)
+    # --redo must not forget what earlier runs did: it ignores the state when
+    # deciding what to process, but the file is still carried forward.
+    state = {} if args.no_state else load_state(args.state)
     totals = Totals()
     started = time.monotonic()
 
@@ -273,7 +263,8 @@ def main(argv: list[str] | None = None) -> int:
             totals.skipped_filter += 1
             continue
         key = str(pair.subtitle)
-        if not args.redo and not args.verify and state.get(key, {}).get("fingerprint") == fingerprint(pair.subtitle):
+        if (not args.redo and not args.verify
+                and state.get(key, {}).get("fingerprint") == fingerprint(pair.subtitle)):
             totals.skipped_done += 1
             continue
         pairs.append(pair)
@@ -351,6 +342,11 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 except OSError:
                     pass
+            elif result.get("status") == "reverted":
+                totals.reverted += 1
+                totals.failures.append({"subtitle": str(pair.subtitle), "error": result.get("error", "")})
+                print(f"[{done}/{total}] REVERTED {pair.subtitle}  did not converge, original restored",
+                      file=sys.stderr)
             else:
                 totals.failed += 1
                 error = result.get("error", "unknown error")

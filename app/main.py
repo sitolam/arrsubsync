@@ -26,6 +26,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.shifts import worst_shift
+
 # --------------------------------------------------------------------------- #
 # Configuration (all via environment variables)
 # --------------------------------------------------------------------------- #
@@ -38,6 +40,12 @@ ALASS_NO_SPLITS = os.environ.get("ALASS_NO_SPLITS", "false").lower() in {"1", "t
 ALASS_SPEED_OPTIMIZATION = os.environ.get("ALASS_SPEED_OPTIMIZATION", "").strip()
 ALASS_DISABLE_FPS_GUESSING = os.environ.get("ALASS_DISABLE_FPS_GUESSING", "false").lower() in {"1", "true", "yes"}
 MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "2"))
+# After replacing a subtitle, align the result again. A correct sync is a fixed
+# point: alass should find nothing left to do. If it instead wants to move the
+# file by another large amount, the subtitle does not match this audio and the
+# "sync" made it worse, so the original is put back.
+ALASS_VERIFY_AFTER = os.environ.get("ALASS_VERIFY_AFTER", "true").lower() in {"1", "true", "yes"}
+ALASS_VERIFY_THRESHOLD = float(os.environ.get("ALASS_VERIFY_THRESHOLD", "2.0"))
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 
 # alass reads these itself, but we surface them so misconfiguration is visible.
@@ -110,6 +118,13 @@ class SyncRequest(BaseModel):
     )
     disable_fps_guessing: bool | None = Field(
         default=None, description="alass -g: do not guess/correct a framerate difference."
+    )
+    verify_after: bool | None = Field(
+        default=None,
+        description="Re-align the result and revert if it did not converge (default on).",
+    )
+    verify_threshold: float | None = Field(
+        default=None, description="Seconds of residual shift tolerated by the check."
     )
     dry_run: bool = Field(
         default=False, description="Run alass but do not replace the original subtitle file."
@@ -399,6 +414,10 @@ async def sync(req: SyncRequest) -> JSONResponse:
 
     size_after = output.stat().st_size
 
+    keep = subtitle.with_name(f".alass-original-{request_id}{subtitle.suffix}")
+    if not req.dry_run:
+        shutil.copy2(subtitle, keep)
+
     if req.dry_run:
         output.unlink(missing_ok=True)
         logx(logging.INFO, "dry run complete", request_id=request_id, subtitle=str(subtitle))
@@ -407,12 +426,64 @@ async def sync(req: SyncRequest) -> JSONResponse:
             replace_subtitle(subtitle, output)
         except OSError as exc:
             output.unlink(missing_ok=True)
+            keep.unlink(missing_ok=True)
             msg = f"could not replace original subtitle: {exc}"
             logx(logging.ERROR, "replace failed", request_id=request_id, subtitle=str(subtitle), error=msg)
             return JSONResponse(
                 status_code=500,
                 content={"status": "error", "request_id": request_id, "error": msg, "subtitle": str(subtitle)},
             )
+
+    verify_summary = None
+    reverted = False
+    do_verify = ALASS_VERIFY_AFTER if req.verify_after is None else req.verify_after
+    threshold = ALASS_VERIFY_THRESHOLD if req.verify_threshold is None else req.verify_threshold
+
+    if do_verify and not req.dry_run:
+        check_output = subtitle.with_name(f".alass-verify-{request_id}{subtitle.suffix}")
+        try:
+            code, vstdout, vstderr = await run_alass(build_argv(video, subtitle, check_output, req))
+            check_output.unlink(missing_ok=True)
+            if code == 0:
+                verify_summary = alass_summary(vstdout) or alass_summary(vstderr)
+                residual = worst_shift(verify_summary)
+                if residual > threshold:
+                    shutil.copy2(keep, subtitle)
+                    reverted = True
+                    logx(
+                        logging.WARNING,
+                        "sync reverted: result did not converge",
+                        request_id=request_id,
+                        subtitle=str(subtitle),
+                        residual_seconds=round(residual, 3),
+                        verify_summary=verify_summary,
+                    )
+        except Exception as exc:  # noqa: BLE001 - a failed check must not lose the file
+            check_output.unlink(missing_ok=True)
+            logx(logging.WARNING, "verification could not run", request_id=request_id, error=repr(exc))
+        finally:
+            keep.unlink(missing_ok=True)
+    elif not req.dry_run:
+        keep.unlink(missing_ok=True)
+
+    if reverted:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "reverted",
+                "request_id": request_id,
+                "error": (
+                    "alass did not converge: after syncing, it wanted to move the subtitle by "
+                    f"another {worst_shift(verify_summary):.1f}s. The subtitle does not match this "
+                    "audio, so the original was restored."
+                ),
+                "video": str(video),
+                "subtitle": str(subtitle),
+                "alass_summary": alass_summary(stdout),
+                "verify_summary": verify_summary,
+                "duration_seconds": duration,
+            },
+        )
 
     logx(
         logging.INFO,
@@ -438,6 +509,7 @@ async def sync(req: SyncRequest) -> JSONResponse:
             "duration_seconds": duration,
             # alass reports the offsets and split count it applied on stdout.
             "alass_summary": alass_summary(stdout) or alass_summary(stderr),
+            "verify_summary": verify_summary,
             "alass_stdout": stdout,
             "alass_stderr": stderr,
         },

@@ -207,3 +207,24 @@ def test_backup_mirrors_media_root_not_walk_root(library: Path, tmp_path: Path, 
     season = library / "TV" / "Bar" / "Season 01"
     bulk.main([str(season), "--apply", "--no-state", "--backup-dir", str(backups), "--workers", "1"])
     assert (backups / "TV" / "Bar" / "Season 01" / "Bar - S01E01.en.srt").exists()
+
+
+def test_reverted_results_are_counted_separately(library: Path, capsys, monkeypatch):
+    monkeypatch.setattr(bulk, "post_sync", lambda e, p, a, dry_run=False: {
+        "status": "reverted", "error": "alass did not converge"})
+    rc = bulk.main([str(library), "--apply", "--no-state", "--workers", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["reverted"] == 4 and out["synced"] == 0 and out["failed"] == 0
+    assert rc == 0
+
+
+def test_redo_keeps_the_existing_state_file(library: Path, tmp_path: Path, monkeypatch, capsys):
+    """--redo re-syncs everything, but must not erase what earlier runs recorded."""
+    monkeypatch.setattr(bulk, "post_sync", lambda *a, **k: {"status": "ok"})
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"/data/elsewhere/Other.srt": {"fingerprint": "1:2", "at": 0}}))
+    bulk.main([str(library), "--apply", "--redo", "--state", str(state), "--workers", "1"])
+    capsys.readouterr()
+    kept = json.loads(state.read_text())
+    assert "/data/elsewhere/Other.srt" in kept, "--redo wiped unrelated state entries"
+    assert len(kept) == 5

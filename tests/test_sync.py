@@ -21,7 +21,14 @@ case "$STUB_MODE" in
   hang) sleep 30 ;;
   empty) : > "$3"; exit 0 ;;
 esac
-echo "shifted block of 2 subtitles with length 0:00:05.000 by -0:00:11.997"
+# Behave like alass on a good pair: a real shift first, nothing left to do after.
+n=$(cat "$STUB_COUNTER" 2>/dev/null || echo 0)
+n=$((n + 1)); echo "$n" > "$STUB_COUNTER"
+if [ "$n" = "1" ]; then
+  echo "shifted block of 2 subtitles with length 0:00:05.000 by -0:00:11.997"
+else
+  echo "shifted block of 2 subtitles with length 0:00:05.000 by 0:00:00.000"
+fi
 printf '1\\n00:00:02,500 --> 00:00:03,500\\nhi\\n' > "$3"
 """
 
@@ -49,6 +56,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("MEDIA_ROOT", str(media))
     monkeypatch.setenv("ALASS_BIN", str(stub))
     monkeypatch.setenv("ALASS_TIMEOUT", "2")
+    monkeypatch.setenv("STUB_COUNTER", str(tmp_path / "calls"))
     monkeypatch.delenv("STUB_MODE", raising=False)
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -219,3 +227,53 @@ def test_no_splits_uses_the_flag_alass_actually_has(env):
                                "no_splits": True, "dry_run": True})
     assert "--no-split" in seen[0]
     assert "--no-splits" not in seen[0]
+
+
+STUB_DRIFTING = """#!/bin/sh
+# Pretends to sync, but always reports a large shift: never converges.
+echo "shifted block of 9 subtitles with length 0:40:00.000 by -0:04:51.628"
+printf '1\\n00:00:09,000 --> 00:00:10,000\\nmoved\\n' > "$3"
+"""
+
+
+def test_non_converging_sync_is_reverted(env, tmp_path):
+    """The E01 failure mode: a subtitle that does not match must not be mangled."""
+    main, client, video, subtitle, _ = env
+    stub = tmp_path / "drifting"
+    stub.write_text(STUB_DRIFTING)
+    stub.chmod(0o755)
+    main.ALASS_BIN = str(stub)
+    original = subtitle.read_text()
+
+    r = client.post("/sync", json={"video": str(video), "subtitle": str(subtitle)})
+
+    assert r.status_code == 409
+    body = r.json()
+    assert body["status"] == "reverted"
+    assert "does not match this audio" in body["error"]
+    assert subtitle.read_text() == original, "the original must be restored byte for byte"
+    assert not list(subtitle.parent.glob(".alass-*")), "no scratch files left behind"
+
+
+def test_converging_sync_is_kept(env):
+    main, client, video, subtitle, _ = env
+    r = client.post("/sync", json={"video": str(video), "subtitle": str(subtitle)})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok"
+    # the stub always returns the same shifted file, so the check sees a repeat
+    # of the same small reported shift and accepts it
+    assert "00:00:02,500" in subtitle.read_text()
+    assert not list(subtitle.parent.glob(".alass-*"))
+
+
+def test_verification_can_be_turned_off(env, tmp_path):
+    main, client, video, subtitle, _ = env
+    stub = tmp_path / "drifting"
+    stub.write_text(STUB_DRIFTING)
+    stub.chmod(0o755)
+    main.ALASS_BIN = str(stub)
+    r = client.post("/sync", json={"video": str(video), "subtitle": str(subtitle),
+                                   "verify_after": False})
+    assert r.status_code == 200
+    assert "moved" in subtitle.read_text()
