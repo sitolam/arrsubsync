@@ -210,6 +210,11 @@ class JobRequest(BaseModel):
     paths: list[str] | None = None
 
 
+@app.post("/api/jobs/cancel")
+async def cancel_job(user: str = Depends(current_user)) -> dict[str, Any]:
+    return {"cancelled": jobs.runner.cancel()}
+
+
 @app.post("/api/jobs/{kind}")
 async def start_job(kind: str, req: JobRequest | None = None,
                     user: str = Depends(current_user)) -> dict[str, Any]:
@@ -228,11 +233,6 @@ async def start_job(kind: str, req: JobRequest | None = None,
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return job.as_dict()
-
-
-@app.post("/api/jobs/cancel")
-async def cancel_job(user: str = Depends(current_user)) -> dict[str, Any]:
-    return {"cancelled": jobs.runner.cancel()}
 
 
 @app.post("/api/subtitles/ignore")

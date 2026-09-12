@@ -223,16 +223,25 @@ async def heal_job(job: Job, paths: list[str] | None = None) -> None:
             break
         subtitle = Path(row["path"])
         video = row["video"]
-        language = row["language"] or "en"
         job.current = subtitle.name
         healed = False
+        unavailable = False
+
+        # Bazarr identifies a subtitle by language plus the HI and forced flags,
+        # which live in the filename: Foo.en.hi.srt is a different subtitle to
+        # Foo.en.srt, and asking for the wrong one gets "file not found".
+        pair = scanner.Pair(Path(video), subtitle)
+        tags = [t.lower() for t in pair.tags]
+        language = pair.language or row["language"] or "en"
+        hi = any(t in ("hi", "sdh", "cc") for t in tags)
+        forced = "forced" in tags
 
         for attempt in range(1, max_attempts + 1):
             if job.cancelled:
                 break
             try:
                 before = subtitle.stat().st_mtime if subtitle.exists() else 0
-                how = client.replace(video, str(subtitle), language)
+                how = client.replace(video, str(subtitle), language, hi=hi, forced=forced)
                 totals["replaced"] += 1
                 db.bump(str(subtitle), "replacements")
                 db.log_event("heal", f"attempt {attempt}: {how}", path=str(subtitle))
@@ -251,9 +260,16 @@ async def heal_job(job: Job, paths: list[str] | None = None) -> None:
                     arrived = True
                     break
             if not arrived:
-                db.log_event("heal", f"attempt {attempt}: no replacement arrived within {wait:g}s",
-                             level="warning", path=str(subtitle))
-                continue
+                # Bazarr found nothing to download. Trying again would only
+                # blacklist another subtitle we never saw, so stop here.
+                db.log_event(
+                    "heal",
+                    f"attempt {attempt}: Bazarr found no replacement within {wait:g}s - "
+                    "no other subtitle seems to be available",
+                    level="warning", path=str(subtitle),
+                )
+                unavailable = True
+                break
 
             await asyncio.sleep(2)     # let the writer finish
             try:
@@ -274,9 +290,10 @@ async def heal_job(job: Job, paths: list[str] | None = None) -> None:
 
         if not healed and not job.cancelled:
             totals["gave_up"] += 1
-            db.log_event("heal", f"gave up after {max_attempts} replacements", level="warning",
-                         path=str(subtitle))
-            db.upsert_subtitle(str(subtitle), video, note="no working subtitle found")
+            note = ("Bazarr has no other subtitle" if unavailable
+                    else f"no working subtitle found in {max_attempts} tries")
+            db.log_event("heal", note, level="warning", path=str(subtitle))
+            db.upsert_subtitle(str(subtitle), video, note=note)
 
         job.done += 1
         job.totals = dict(totals)

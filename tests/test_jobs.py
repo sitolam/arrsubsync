@@ -63,7 +63,7 @@ class FakeClient:
         self.calls = 0
         self.good_after = good_after
 
-    def replace(self, video, subtitle_path, language):
+    def replace(self, video, subtitle_path, language, hi=False, forced=False):
         self.calls += 1
         # Write a new file so the loop sees a replacement arrive.
         self.subtitle.write_text(f"1\n00:00:0{self.calls},000 --> 00:00:09,000\nnew\n")
@@ -104,7 +104,7 @@ def test_heal_gives_up_after_the_attempt_budget(env, monkeypatch):
     assert fake.calls == 3, "it should try exactly the configured number of times"
     assert job.totals["gave_up"] == 1
     assert job.totals["healed"] == 0
-    assert env.db.get_subtitle(str(env.subtitle))["note"] == "no working subtitle found"
+    assert "no working subtitle found" in env.db.get_subtitle(str(env.subtitle))["note"]
 
 
 def test_heal_stops_when_cancelled(env, monkeypatch):
@@ -116,3 +116,47 @@ def test_heal_stops_when_cancelled(env, monkeypatch):
     job.cancelled = True
     run(env.jobs.heal_job(job))
     assert fake.calls == 0
+
+
+class SilentClient:
+    """Bazarr that accepts the request but never produces a new file."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def replace(self, video, subtitle_path, language, hi=False, forced=False):
+        self.calls += 1
+        return "blacklisted and re-searched"
+
+
+def test_heal_stops_when_bazarr_has_nothing_to_offer(env, monkeypatch):
+    """No replacement arriving means no other subtitle exists - do not burn attempts."""
+    env.db.save_settings({"bazarr_url": "u", "bazarr_api_key": "k",
+                          "replace_wait_seconds": 4, "max_replace_attempts": 3})
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="failed", language="en")
+    fake = SilentClient()
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+
+    job = env.jobs.Job(kind="heal")
+    run(env.jobs.heal_job(job))
+
+    assert fake.calls == 1, "it should not keep asking when nothing comes back"
+    assert env.db.get_subtitle(str(env.subtitle))["note"] == "Bazarr has no other subtitle"
+
+
+def test_heal_passes_hi_and_forced_flags(env, monkeypatch):
+    seen = {}
+
+    class Recorder(SilentClient):
+        def replace(self, video, subtitle_path, language, hi=False, forced=False):
+            seen.update(language=language, hi=hi, forced=forced)
+            return super().replace(video, subtitle_path, language, hi, forced)
+
+    hi_sub = env.media / "Movies" / "Foo (2019)" / "Foo (2019).nl.hi.srt"
+    hi_sub.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n")
+    env.db.save_settings({"bazarr_url": "u", "bazarr_api_key": "k", "replace_wait_seconds": 3})
+    env.db.upsert_subtitle(str(hi_sub), str(env.video), status="failed")
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: Recorder()))
+
+    run(env.jobs.heal_job(env.jobs.Job(kind="heal")))
+    assert seen == {"language": "nl", "hi": True, "forced": False}

@@ -130,9 +130,10 @@ class Bazarr:
             form |= {"radarrid": target["radarrid"]}
             self._request("POST", "movies/blacklist", form=form)
 
-    def delete_and_search(self, target: dict[str, Any], subtitle_path: str, language: str) -> None:
+    def delete_and_search(self, target: dict[str, Any], subtitle_path: str, language: str,
+                          hi: bool = False, forced: bool = False) -> None:
         """Used when there is no history entry to blacklist: delete, then search."""
-        common = {"language": language, "forced": "False", "hi": "False"}
+        common = {"language": language, "forced": str(forced), "hi": str(hi)}
         if target["kind"] == "episode":
             ids = {"seriesid": target["seriesid"], "episodeid": target["episodeid"]}
             self._request("DELETE", "episodes/subtitles", form=common | ids | {"path": subtitle_path})
@@ -142,18 +143,28 @@ class Bazarr:
             self._request("DELETE", "movies/subtitles", form=common | ids | {"path": subtitle_path})
             self._request("PATCH", "movies/subtitles", form=common | ids)
 
-    def replace(self, video: str, subtitle_path: str, language: str) -> str:
+    def replace(self, video: str, subtitle_path: str, language: str,
+                hi: bool = False, forced: bool = False) -> str:
         """Ask Bazarr for a different subtitle. Returns the method used."""
         target = self.locate(video)
         if not target:
             raise BazarrError(f"Bazarr does not know this file: {video}")
-        history = self.history_for(target, subtitle_path)
+
+        # Bazarr's blacklist endpoint deletes the file with hi=False, forced=False
+        # hardcoded, so it cannot find - and refuses to blacklist - an HI or forced
+        # subtitle. Those go down the delete-and-search path instead.
+        history = None if (hi or forced) else self.history_for(target, subtitle_path)
         if history:
-            self.blacklist_and_replace(target, subtitle_path, language, history)
-            logx(logging.INFO, "blacklisted subtitle in Bazarr", subtitle=subtitle_path,
-                 provider=history.get("provider"), title=target.get("title"))
-            return f"blacklisted ({history.get('provider')}) and re-searched"
-        self.delete_and_search(target, subtitle_path, language)
+            try:
+                self.blacklist_and_replace(target, subtitle_path, language, history)
+                logx(logging.INFO, "blacklisted subtitle in Bazarr", subtitle=subtitle_path,
+                     provider=history.get("provider"), title=target.get("title"))
+                return f"blacklisted ({history.get('provider')}) and re-searched"
+            except BazarrError as exc:
+                logx(logging.WARNING, "blacklist refused, falling back to delete",
+                     subtitle=subtitle_path, error=str(exc))
+
+        self.delete_and_search(target, subtitle_path, language, hi=hi, forced=forced)
         logx(logging.INFO, "deleted subtitle and asked Bazarr to search", subtitle=subtitle_path,
-             title=target.get("title"))
+             title=target.get("title"), hi=hi, forced=forced)
         return "deleted and re-searched"

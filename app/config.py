@@ -39,7 +39,7 @@ DEFAULTS: dict[str, Any] = {
     # Automatic replacement of subtitles alass cannot align.
     "auto_replace": os.environ.get("ARRSUBSYNC_AUTO_REPLACE", "false").lower() in {"1", "true", "yes"},
     "max_replace_attempts": int(os.environ.get("ARRSUBSYNC_MAX_ATTEMPTS", "3")),
-    "replace_wait_seconds": 90.0,
+    "replace_wait_seconds": 180.0,
     # Scheduled full sweeps of the library.
     "schedule_enabled": os.environ.get("ARRSUBSYNC_SCHEDULE", "false").lower() in {"1", "true", "yes"},
     "schedule_hours": float(os.environ.get("ARRSUBSYNC_SCHEDULE_HOURS", "24")),

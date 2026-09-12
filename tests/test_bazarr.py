@@ -70,3 +70,39 @@ def test_replace_falls_back_to_delete_and_search(env):
     assert ("DELETE", "episodes/subtitles") in methods
     assert ("PATCH", "episodes/subtitles") in methods
     assert how == "deleted and re-searched"
+
+
+def test_hi_subtitles_never_go_through_the_blacklist(env):
+    """Bazarr's blacklist deletes with hi=False hardcoded, so it cannot find them."""
+    fake = FakeBazarr(env)
+    how = fake.client.replace("/data/Series/GoT/Season 05/ep1.mkv",
+                              "/data/Series/GoT/Season 05/ep1.en.hi.srt", "en", hi=True)
+    assert not [c for c in fake.calls if c[1] == "episodes/blacklist"]
+    deletes = [c for c in fake.calls if c[1] == "episodes/subtitles" and c[0] == "DELETE"]
+    assert deletes and deletes[0][2]["hi"] == "True"
+    assert how == "deleted and re-searched"
+
+
+def test_forced_subtitles_carry_the_flag(env):
+    fake = FakeBazarr(env)
+    fake.client.replace("/data/Movies/Aliens/Aliens.mkv", "/data/Movies/Aliens/Aliens.en.forced.srt",
+                        "en", forced=True)
+    deletes = [c for c in fake.calls if c[0] == "DELETE"]
+    assert deletes[0][2]["forced"] == "True"
+
+
+def test_a_refused_blacklist_falls_back_to_delete(env):
+    from app.bazarr import BazarrError
+
+    fake = FakeBazarr(env)
+    original = fake.client._request
+
+    def refuse(method, path, params=None, form=None):
+        if path.endswith("blacklist"):
+            raise BazarrError("HTTP 500: Subtitles file not found")
+        return original(method, path, params, form)
+
+    fake.client._request = refuse
+    how = fake.client.replace("/data/Series/GoT/Season 05/ep1.mkv",
+                              "/data/Series/GoT/Season 05/ep1.nl.srt", "nl")
+    assert how == "deleted and re-searched", "a refusal must not abandon the subtitle"

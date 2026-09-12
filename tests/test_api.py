@@ -97,3 +97,10 @@ def test_ignoring_a_subtitle_hides_it_from_the_counts(env, client):
     before = env.db.counts()["total"]
     client.post("/api/subtitles/ignore", json={"paths": [str(env.subtitle)]})
     assert env.db.counts()["total"] == before - 1
+
+
+def test_cancel_is_not_swallowed_by_the_job_route(client):
+    """/api/jobs/cancel must not be read as a job named "cancel"."""
+    r = client.post("/api/jobs/cancel")
+    assert r.status_code == 200
+    assert "cancelled" in r.json()
