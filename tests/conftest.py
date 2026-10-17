@@ -21,6 +21,12 @@ case "$STUB_MODE" in
   empty) : > "$3"; exit 0 ;;
   drift) echo "shifted block of 9 subtitles with length 0:40:00.000 by -0:04:51.628"
          printf '1\\n00:00:09,000 --> 00:00:10,000\\nmoved\\n' > "$3"; exit 0 ;;
+  zero)  echo "shifted block of 2 subtitles with length 0:00:05.000 by 0:00:00.000"
+         printf '1\\n00:00:01,000 --> 00:00:02,000\\nrewritten\\n' > "$3"; exit 0 ;;
+  jitter) n=$(cat "$STUB_COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$STUB_COUNTER"
+         if [ $((n % 2)) = 1 ]; then s="-0:00:00.330"; else s="0:00:00.330"; fi
+         echo "shifted block of 2 subtitles with length 0:00:05.000 by $s"
+         printf '1\\n00:00:01,330 --> 00:00:02,330\\njittered\\n' > "$3"; exit 0 ;;
 esac
 n=$(cat "$STUB_COUNTER" 2>/dev/null || echo 0)
 n=$((n + 1)); echo "$n" > "$STUB_COUNTER"

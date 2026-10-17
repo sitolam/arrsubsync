@@ -132,3 +132,27 @@ def test_ownership_is_preserved(env):
     run(env.syncer.sync(str(env.video), str(env.subtitle)))
     st_after = os.stat(env.subtitle)
     assert (st_after.st_uid, st_after.st_gid) == (st_before.st_uid, st_before.st_gid)
+
+
+def test_a_subtitle_already_in_sync_is_not_rewritten(env, monkeypatch):
+    """alass rewrites the file even at zero shift; installing that changes nothing but the mtime."""
+    monkeypatch.setenv("STUB_MODE", "zero")
+    before = env.subtitle.read_text()
+    mtime = env.subtitle.stat().st_mtime_ns
+    result = run(env.syncer.sync(str(env.video), str(env.subtitle)))
+    assert result.status == "ok"
+    assert result.replaced is False
+    assert env.subtitle.read_text() == before
+    assert env.subtitle.stat().st_mtime_ns == mtime
+    assert env.db.get_subtitle(str(env.subtitle))["status"] == "ok"
+
+
+def test_jitter_is_not_a_correction(env, monkeypatch):
+    """alass moving a subtitle and then straight back is noise, not a fix."""
+    monkeypatch.setenv("STUB_MODE", "jitter")
+    before = env.subtitle.read_text()
+    result = run(env.syncer.sync(str(env.video), str(env.subtitle)))
+    assert result.status == "ok"
+    assert result.replaced is False
+    assert env.subtitle.read_text() == before
+    assert env.db.get_subtitle(str(env.subtitle))["status"] == "ok"

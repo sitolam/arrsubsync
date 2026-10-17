@@ -49,3 +49,14 @@ def test_language_filter(env):
 def test_video_for_finds_the_companion(env):
     assert env.scanner.video_for(env.subtitle) == env.video
     assert env.scanner.video_for(env.media / "Movies" / "Foo (2019)" / "nothing.srt") is None
+
+
+def test_flag_tags_are_not_languages(env):
+    """`hi` is a flag here, not Hindi: Foo.hi.srt has no language in its name."""
+    from pathlib import Path
+
+    video = Path("/m/Foo.mkv")
+    assert env.scanner.Pair(video, Path("/m/Foo.hi.srt")).language is None
+    assert env.scanner.Pair(video, Path("/m/Foo.cc.srt")).language is None
+    assert env.scanner.Pair(video, Path("/m/Foo.nl.hi.srt")).language == "nl"
+    assert env.scanner.Pair(video, Path("/m/Foo.sdh.en.srt")).language == "en"

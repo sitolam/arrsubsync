@@ -151,13 +151,22 @@ Turn on **Replace subtitles that cannot be fixed** and **Run a full sweep on a s
 and the loop below runs without you:
 
 1. **Index** the library — every video with subtitles beside it.
-2. **Check and correct** anything that drifted, verifying each correction.
-3. **Heal** what could not be aligned:
-   - Blacklist that subtitle in Bazarr, which deletes it and starts a fresh search.
-     Blacklisting matters: it stops the provider handing back the same file.
-   - Wait for the replacement to land, sync it, verify it.
+2. **Check and correct** what is new or changed, verifying each correction. A subtitle
+   already verified is left alone until its file changes.
+3. **Heal** what verifiably does not match the audio:
+   - Copy it to `/config/replaced/`, then blacklist it in Bazarr, which deletes it and
+     starts a fresh search. Blacklisting matters: it stops the provider handing back the
+     same file.
+   - Wait for the replacement to land — under any name, since Bazarr names files by
+     what it knows — then sync it and verify it.
    - Not right either? Try again, up to **Replacement attempts per subtitle** (default 3),
-     then mark it as needing a human and move on.
+     then mark it as needing a human and move on. A sweep does not retry it until its
+     file changes.
+
+Healing never leaves a video with less than it had. If Bazarr finds nothing, or the job
+is stopped mid-search, the original goes back where it was. A subtitle alass merely
+*failed* on — a timeout, an unreadable audio track — is not evidence against the subtitle,
+so it is reported but never replaced automatically.
 
 Nothing loops forever, and nothing is left half-applied: a subtitle is either improved or
 byte-for-byte what it was.
@@ -191,6 +200,9 @@ So every sync that touches a file is verified:
 - alass is run again against the result.
 - If the second pass wants to move it more than **Verify threshold** (default 2s), the
   original is restored and the caller gets `409 reverted` with the residual named.
+- If the second pass wants most of the move back (alass nudging a subtitle 0.3s one way,
+  then 0.3s the other), neither position is better: the original is kept as it was.
+- A subtitle alass finds already in sync is never rewritten, so its file keeps its mtime.
 
 ```json
 {

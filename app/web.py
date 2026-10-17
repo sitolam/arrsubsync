@@ -239,9 +239,9 @@ DASHBOARD = """<!doctype html><html><head><meta charset="utf-8">
     <h2>Automation</h2>
     <div class="settings">
       <div class="field"><label class="switch"><input type="checkbox" id="set_auto_replace"> Replace subtitles that cannot be fixed</label>
-        <div class="hint">When alass cannot align a subtitle, blacklist it in Bazarr and fetch another, then sync that. Repeats until it sticks.</div></div>
+        <div class="hint">When a subtitle verifiably does not match the audio, blacklist it in Bazarr and fetch another, then sync that. Repeats until it sticks. If nothing replaces it, the original is put back; a copy is always kept in /config/replaced.</div></div>
       <div class="field"><label class="switch"><input type="checkbox" id="set_schedule_enabled"> Run a full sweep on a schedule</label>
-        <div class="hint">Indexes the library, corrects what drifted, then heals what it cannot fix.</div></div>
+        <div class="hint">Indexes the library, checks new and changed subtitles, then heals what it cannot fix.</div></div>
       <div class="field"><label>Hours between sweeps</label><input type="number" id="set_schedule_hours" min="0.25" step="0.25"></div>
       <div class="field"><label>Replacement attempts per subtitle</label><input type="number" id="set_max_replace_attempts" min="1" max="10">
         <div class="hint">How many different subtitles to try before giving up.</div></div>

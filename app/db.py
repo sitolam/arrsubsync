@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS subtitles (
     checked_at      REAL,
     fixed_at        REAL,
     ignored         INTEGER NOT NULL DEFAULT 0,
-    note            TEXT
+    note            TEXT,
+    given_up_mtime  REAL
 );
 CREATE INDEX IF NOT EXISTS subtitles_status ON subtitles(status);
 
@@ -82,10 +83,19 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+# Columns added after the first release, for databases created before them.
+MIGRATIONS = {"subtitles": {"given_up_mtime": "REAL"}}
+
+
 def init() -> None:
     conn = connect()
     with conn:
         conn.executescript(SCHEMA)
+        for table, columns in MIGRATIONS.items():
+            have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            for name, kind in columns.items():
+                if name not in have:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
 
 # --------------------------------------------------------------------------- #
@@ -150,7 +160,7 @@ def log_event(kind: str, message: str, *, level: str = "info", path: str | None 
             (time.time(), level, kind, path, message, json.dumps(data) if data else None),
         )
         conn.execute(
-            "DELETE FROM events WHERE id < (SELECT MAX(id) - 5000 FROM events)"
+            "DELETE FROM events WHERE id < (SELECT MAX(id) - 50000 FROM events)"
         )
 
 
@@ -200,6 +210,12 @@ def set_ignored(path: str, ignored: bool) -> None:
     conn = connect()
     with conn:
         conn.execute("UPDATE subtitles SET ignored = ? WHERE path = ?", (int(ignored), path))
+
+
+def forget(path: str) -> None:
+    conn = connect()
+    with conn:
+        conn.execute("DELETE FROM subtitles WHERE path = ?", (path,))
 
 
 def forget_missing(seen: Iterable[str]) -> int:

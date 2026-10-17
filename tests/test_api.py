@@ -121,3 +121,13 @@ def test_scheduler_looks_at_the_last_scheduled_run(env):
                      if r["kind"] == "scheduled" and r["finished"]), None)
     assert previous is not None
     assert time.time() - previous["finished"] < 3600, "the scheduled run is recent, so nothing is due"
+
+
+def test_hook_does_not_replace_a_subtitle_alass_merely_failed_on(env, client, monkeypatch):
+    """A crash or timeout is not evidence against the subtitle; Bazarr must not delete it."""
+    monkeypatch.setenv("STUB_MODE", "fail")
+    env.db.save_settings({"auto_replace": True, "bazarr_url": "u", "bazarr_api_key": "k"})
+    r = client.post("/sync", json={"video": str(env.video), "subtitle": str(env.subtitle)})
+    assert r.json()["status"] == "failed"
+    assert "auto_replace" not in r.json()
+    assert not env.jobs.runner.busy

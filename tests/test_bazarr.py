@@ -34,7 +34,7 @@ def test_locates_an_episode(env):
     fake = FakeBazarr(env)
     target = fake.client.locate("/data/Series/GoT/Season 05/ep1.mkv")
     assert target == {"kind": "episode", "seriesid": 11, "episodeid": 1177,
-                      "title": "Game of Thrones 5x1"}
+                      "title": "Game of Thrones 5x1", "subtitles": []}
 
 
 def test_locates_a_movie(env):
@@ -106,3 +106,18 @@ def test_a_refused_blacklist_falls_back_to_delete(env):
     how = fake.client.replace("/data/Series/GoT/Season 05/ep1.mkv",
                               "/data/Series/GoT/Season 05/ep1.nl.srt", "nl")
     assert how == "deleted and re-searched", "a refusal must not abandon the subtitle"
+
+
+def test_bazarrs_own_record_of_the_subtitle_wins_over_the_filename(env):
+    """Bazarr stores Foo.hi.srt as Dutch, not hearing-impaired; ask for what it knows."""
+    path = "/data/Series/GoT/Season 05/ep1.hi.srt"
+    episodes = {"data": [dict(EPISODES["data"][0], subtitles=[
+        {"code2": "nl", "path": path, "hi": False, "forced": False},
+    ])]}
+    history = {"data": [{"subtitles_path": path, "provider": "opensubtitles",
+                         "subs_id": "x9", "language": "nl"}]}
+    fake = FakeBazarr(env, episodes=episodes, **{"episodes/history": history})
+    fake.client.replace("/data/Series/GoT/Season 05/ep1.mkv", path, "hi", hi=True)
+    posted = [c for c in fake.calls if c[1] == "episodes/blacklist"]
+    assert posted and posted[0][2]["language"] == "nl"
+    assert not [c for c in fake.calls if c[0] == "PATCH" and c[2]["language"] == "hi"]

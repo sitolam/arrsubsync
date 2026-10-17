@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -167,7 +169,7 @@ async def check_job(job: Job, *, apply: bool, only: list[str] | None = None,
                 result = await syncer.sync(str(pair.video), str(pair.subtitle), dry_run=not apply)
                 if result.status == "ok":
                     if apply:
-                        totals["fixed" if (result.applied_shift or 0) > 0.05 else "ok"] += 1
+                        totals["fixed" if result.replaced else "ok"] += 1
                     else:
                         shift = result.applied_shift or 0
                         threshold = float(settings["verify_threshold"])
@@ -195,87 +197,149 @@ async def check_job(job: Job, *, apply: bool, only: list[str] | None = None,
     job.totals = dict(totals)
 
 
-async def heal_job(job: Job, paths: list[str] | None = None) -> None:
+def keep_copy(subtitle: Path) -> Path:
+    """Copy a subtitle aside before Bazarr is asked to delete it."""
+    try:
+        relative = subtitle.relative_to(config.MEDIA_ROOT)
+    except ValueError:
+        relative = Path(subtitle.name)
+    target = config.DATA_DIR / "replaced" / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(subtitle, target)
+    return target
+
+
+def restore(saved: Path, subtitle: Path, owner: os.stat_result) -> None:
+    shutil.copy2(saved, subtitle)
+    try:
+        os.chown(subtitle, owner.st_uid, owner.st_gid)
+    except PermissionError:
+        pass
+
+
+async def wait_for_new(video: Path, before: dict[Path, float], wait: float, job: Job) -> Path | None:
+    """The subtitle Bazarr wrote for `video` since `before`, whatever it named it."""
+    deadline = time.time() + wait
+    while time.time() < deadline and not job.cancelled:
+        await asyncio.sleep(3)
+        now = scanner.subtitles_beside(video)
+        fresh = [p for p, mtime in now.items() if p not in before or mtime > before[p]]
+        if fresh:
+            return max(fresh, key=lambda p: now[p])
+    return None
+
+
+def heal_targets(paths: list[str] | None, automatic: bool) -> list[dict[str, Any]]:
+    if paths:
+        rows = [r for r in (db.get_subtitle(p) for p in paths) if r]
+    else:
+        # Only a verified mismatch is evidence the subtitle is wrong. alass
+        # failing - a timeout, an audio track it cannot read - says nothing
+        # about the subtitle, and is no reason to delete it.
+        rows = [r for r in db.list_subtitles(status=db.REVERTED, limit=100000) if not r["ignored"]]
+    if not automatic:
+        return rows
+
+    def given_up(row: dict[str, Any]) -> bool:
+        try:
+            return row["given_up_mtime"] == Path(row["path"]).stat().st_mtime
+        except OSError:
+            return False
+
+    return [r for r in rows if not given_up(r)]
+
+
+async def heal_job(job: Job, paths: list[str] | None = None, *, automatic: bool | None = None) -> None:
     """Replace subtitles that cannot be aligned, then sync whatever arrives.
 
     For each bad subtitle: ask Bazarr for a different one, wait for it to land,
     sync it, and verify. Repeat until it sticks or the attempt budget runs out.
+    Whatever happens, the video is never left with less than it had: if no
+    replacement arrives, the original is put back.
+
+    Automatic runs skip a subtitle already given up on, until its file changes;
+    asking for specific paths from the dashboard always tries.
     """
     settings = db.get_settings()
     client = bazarr.Bazarr.from_settings()
     if client is None:
         raise RuntimeError("Bazarr is not configured; set its URL and API key in Settings")
 
-    if paths:
-        targets = [db.get_subtitle(p) for p in paths]
-        targets = [t for t in targets if t]
-    else:
-        targets = [row for row in db.list_subtitles(limit=100000)
-                   if row["status"] in db.BAD and not row["ignored"]]
-
+    targets = heal_targets(paths, paths is None if automatic is None else automatic)
     job.total = len(targets)
-    max_attempts = int(settings["max_replace_attempts"])
-    wait = float(settings["replace_wait_seconds"])
-    totals = {"healed": 0, "replaced": 0, "gave_up": 0, "errors": 0}
+    totals = {"healed": 0, "replaced": 0, "restored": 0, "gave_up": 0, "errors": 0}
 
     for row in targets:
         if job.cancelled:
             break
-        subtitle = Path(row["path"])
-        video = row["video"]
-        job.current = subtitle.name
-        healed = False
-        unavailable = False
+        job.current = Path(row["path"]).name
+        await heal_one(job, client, row, settings, totals)
+        job.done += 1
+        job.totals = dict(totals)
 
-        # Bazarr identifies a subtitle by language plus the HI and forced flags,
-        # which live in the filename: Foo.en.hi.srt is a different subtitle to
-        # Foo.en.srt, and asking for the wrong one gets "file not found".
-        pair = scanner.Pair(Path(video), subtitle)
-        tags = [t.lower() for t in pair.tags]
-        language = pair.language or row["language"] or "en"
-        hi = any(t in ("hi", "sdh", "cc") for t in tags)
-        forced = "forced" in tags
+    job.totals = dict(totals)
 
+
+async def heal_one(job: Job, client: bazarr.Bazarr, row: dict[str, Any], settings: dict[str, Any],
+                   totals: dict[str, int]) -> None:
+    subtitle, video = Path(row["path"]), Path(row["video"])
+    if not subtitle.exists():
+        db.forget(str(subtitle))
+        return
+
+    # Bazarr identifies a subtitle by language plus the HI and forced flags.
+    # The client prefers Bazarr's own record; the filename is the fallback.
+    pair = scanner.Pair(video, subtitle)
+    stored = row["language"] if row["language"] not in scanner.FLAG_TAGS else None
+    language = pair.language or stored or "en"
+    owner = subtitle.stat()
+    saved = keep_copy(subtitle)
+
+    current = subtitle
+    healed = unavailable = False
+    refused = None
+    max_attempts = int(settings["max_replace_attempts"])
+    wait = float(settings["replace_wait_seconds"])
+    try:
         for attempt in range(1, max_attempts + 1):
             if job.cancelled:
                 break
+            before = scanner.subtitles_beside(video)
             try:
-                before = subtitle.stat().st_mtime if subtitle.exists() else 0
-                how = client.replace(video, str(subtitle), language, hi=hi, forced=forced)
-                totals["replaced"] += 1
-                db.bump(str(subtitle), "replacements")
-                db.log_event("heal", f"attempt {attempt}: {how}", path=str(subtitle))
+                how = client.replace(str(video), str(current), language, hi=pair.hi, forced=pair.forced)
             except bazarr.BazarrError as exc:
                 totals["errors"] += 1
-                db.log_event("heal", f"Bazarr refused: {exc}", level="error", path=str(subtitle))
+                refused = f"Bazarr refused: {exc}"
+                db.log_event("heal", refused, level="error", path=str(current))
                 break
+            totals["replaced"] += 1
+            db.bump(str(current), "replacements")
+            db.log_event("heal", f"attempt {attempt}: {how}", path=str(current))
 
-            # Wait for a new file to appear. Bazarr's own post-processing hook
-            # may already have synced it, which is fine - we check either way.
-            arrived = False
-            deadline = time.time() + wait
-            while time.time() < deadline and not job.cancelled:
-                await asyncio.sleep(3)
-                if subtitle.exists() and subtitle.stat().st_mtime > before:
-                    arrived = True
-                    break
-            if not arrived:
-                # Bazarr found nothing to download. Trying again would only
-                # blacklist another subtitle we never saw, so stop here.
-                db.log_event(
-                    "heal",
-                    f"attempt {attempt}: Bazarr found no replacement within {wait:g}s - "
-                    "no other subtitle seems to be available",
-                    level="warning", path=str(subtitle),
-                )
-                unavailable = True
+            # Bazarr's own post-processing hook may already have synced it,
+            # which is fine - we check either way.
+            arrived = await wait_for_new(video, before, wait, job)
+            if arrived is None:
+                if not job.cancelled:
+                    # Trying again would only blacklist another subtitle we
+                    # never saw, so stop here.
+                    db.log_event(
+                        "heal",
+                        f"attempt {attempt}: Bazarr found no replacement within {wait:g}s - "
+                        "no other subtitle seems to be available",
+                        level="warning", path=str(current),
+                    )
+                    unavailable = True
                 break
 
             await asyncio.sleep(2)     # let the writer finish
+            if arrived != current and not current.exists():
+                db.forget(str(current))
+            current = arrived
             try:
-                result = await syncer.sync(video, str(subtitle))
+                result = await syncer.sync(str(video), str(current))
             except syncer.Rejected as exc:
-                db.log_event("heal", exc.message, level="warning", path=str(subtitle))
+                db.log_event("heal", exc.message, level="warning", path=str(current))
                 continue
 
             if result.status == "ok":
@@ -284,28 +348,33 @@ async def heal_job(job: Job, paths: list[str] | None = None) -> None:
                 db.log_event(
                     "heal",
                     f"fixed after {attempt} replacement(s): {describe(result.applied_shift or 0)}",
-                    path=str(subtitle),
+                    path=str(current),
                 )
                 break
+    finally:
+        if not current.exists():
+            restore(saved, subtitle, owner)
+            current = subtitle
+            totals["restored"] += 1
+            db.log_event("heal", "nothing replaced it, so the original was put back",
+                         level="warning", path=str(subtitle))
 
-        if not healed and not job.cancelled:
-            totals["gave_up"] += 1
-            note = ("Bazarr has no other subtitle" if unavailable
-                    else f"no working subtitle found in {max_attempts} tries")
-            db.log_event("heal", note, level="warning", path=str(subtitle))
-            db.upsert_subtitle(str(subtitle), video, note=note)
-
-        job.done += 1
-        job.totals = dict(totals)
-
-    job.totals = dict(totals)
+    if not healed and not job.cancelled:
+        totals["gave_up"] += 1
+        note = refused or ("Bazarr has no other subtitle" if unavailable
+                           else f"no working subtitle found in {max_attempts} tries")
+        db.log_event("heal", note, level="warning", path=str(current))
+        db.upsert_subtitle(str(current), str(video), note=note,
+                           given_up_mtime=current.stat().st_mtime)
 
 
 async def full_job(job: Job) -> None:
     """Everything, in order: index, correct, then heal what is left."""
     await scan_job(job)
     job.done, job.total = 0, 0
-    await check_job(job, apply=True, statuses=[db.UNKNOWN, db.OFF, db.OK, db.FIXED])
+    # Only what is new or changed: a verified subtitle stays verified until its
+    # file changes, and the scan resets a changed file to unknown.
+    await check_job(job, apply=True, statuses=[db.UNKNOWN, db.OFF])
     if db.get_setting("auto_replace") and bazarr.Bazarr.from_settings():
         checked = dict(job.totals)
         job.done, job.total = 0, 0

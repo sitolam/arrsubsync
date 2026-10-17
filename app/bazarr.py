@@ -80,7 +80,8 @@ class Bazarr:
         video_path = str(video)
         for movie in self.movies():
             if movie.get("path") and movie["path"] == video_path:
-                return {"kind": "movie", "radarrid": movie["radarrId"], "title": movie.get("title")}
+                return {"kind": "movie", "radarrid": movie["radarrId"], "title": movie.get("title"),
+                        "subtitles": movie.get("subtitles") or []}
         for show in self.series():
             show_path = show.get("path") or ""
             if show_path and video_path.startswith(show_path.rstrip("/") + "/"):
@@ -91,6 +92,7 @@ class Bazarr:
                             "seriesid": show["sonarrSeriesId"],
                             "episodeid": episode["sonarrEpisodeId"],
                             "title": f"{show.get('title')} {episode.get('season')}x{episode.get('episode')}",
+                            "subtitles": episode.get("subtitles") or [],
                         }
         return None
 
@@ -149,6 +151,15 @@ class Bazarr:
         target = self.locate(video)
         if not target:
             raise BazarrError(f"Bazarr does not know this file: {video}")
+
+        # The filename is only a guess at what Bazarr thinks this subtitle is.
+        # Bazarr's own record is what its delete and search act on: asking with
+        # the wrong language deletes the file and then searches for something
+        # the profile never wanted, so nothing comes back.
+        known = next((s for s in target.get("subtitles", []) if s.get("path") == subtitle_path), None)
+        if known:
+            language = known.get("code2") or language
+            hi, forced = bool(known.get("hi")), bool(known.get("forced"))
 
         # Bazarr's blacklist endpoint deletes the file with hi=False, forced=False
         # hardcoded, so it cannot find - and refuses to blacklist - an HI or forced

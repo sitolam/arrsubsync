@@ -38,7 +38,7 @@ def test_check_records_status_without_touching_files(env):
 
 def test_fix_applies_and_records(env):
     job = env.jobs.Job(kind="fix")
-    run(env.jobs.check_job(job, apply=True))
+    run(env.jobs.check_job(job, apply=True, only=[str(env.subtitle)]))
     assert job.totals["fixed"] >= 1
     row = env.db.get_subtitle(str(env.subtitle))
     assert row["status"] == "fixed"
@@ -94,7 +94,7 @@ def test_heal_gives_up_after_the_attempt_budget(env, monkeypatch):
     monkeypatch.setenv("STUB_MODE", "drift")       # nothing will ever converge
     env.db.save_settings({"bazarr_url": "http://bazarr:6767", "bazarr_api_key": "k",
                           "replace_wait_seconds": 6, "max_replace_attempts": 3})
-    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="failed", language="en")
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="reverted", language="en")
     fake = FakeClient(env.subtitle)
     monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
 
@@ -133,7 +133,7 @@ def test_heal_stops_when_bazarr_has_nothing_to_offer(env, monkeypatch):
     """No replacement arriving means no other subtitle exists - do not burn attempts."""
     env.db.save_settings({"bazarr_url": "u", "bazarr_api_key": "k",
                           "replace_wait_seconds": 4, "max_replace_attempts": 3})
-    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="failed", language="en")
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="reverted", language="en")
     fake = SilentClient()
     monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
 
@@ -155,8 +155,101 @@ def test_heal_passes_hi_and_forced_flags(env, monkeypatch):
     hi_sub = env.media / "Movies" / "Foo (2019)" / "Foo (2019).nl.hi.srt"
     hi_sub.write_text("1\n00:00:01,000 --> 00:00:02,000\nhi\n")
     env.db.save_settings({"bazarr_url": "u", "bazarr_api_key": "k", "replace_wait_seconds": 3})
-    env.db.upsert_subtitle(str(hi_sub), str(env.video), status="failed")
+    env.db.upsert_subtitle(str(hi_sub), str(env.video), status="reverted")
     monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: Recorder()))
 
     run(env.jobs.heal_job(env.jobs.Job(kind="heal")))
     assert seen == {"language": "nl", "hi": True, "forced": False}
+
+
+class DeletingClient(SilentClient):
+    """What Bazarr really does: delete the subtitle, then search - and find nothing."""
+
+    def replace(self, video, subtitle_path, language, hi=False, forced=False):
+        import os
+        os.unlink(subtitle_path)
+        return super().replace(video, subtitle_path, language, hi, forced)
+
+
+def heal_settings(env, **extra):
+    env.db.save_settings({"bazarr_url": "u", "bazarr_api_key": "k",
+                          "replace_wait_seconds": 4, "max_replace_attempts": 3, **extra})
+
+
+def test_heal_puts_the_original_back_when_nothing_replaces_it(env, monkeypatch):
+    """Never leave a video with no subtitle because a better one was hoped for."""
+    heal_settings(env)
+    original = "1\n00:00:01,000 --> 00:00:02,000\nthe only one we have\n"
+    env.subtitle.write_text(original)
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="reverted", language="en")
+    fake = DeletingClient()
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+
+    job = env.jobs.Job(kind="heal")
+    run(env.jobs.heal_job(job))
+
+    assert fake.calls == 1
+    assert env.subtitle.read_text() == original
+    assert job.totals["restored"] == 1
+    kept = env.config.DATA_DIR / "replaced" / "Movies" / "Foo (2019)" / "Foo (2019).en.srt"
+    assert kept.read_text() == original, "a copy of every subtitle handed to Bazarr is kept"
+
+
+def test_heal_recognises_a_replacement_with_a_different_name(env, monkeypatch):
+    """Bazarr names files by what it knows, so X.hi.srt may come back as X.nl.srt."""
+    heal_settings(env)
+    folder = env.media / "TV" / "Bar" / "Season 01"
+    video, old, new = folder / "Bar - S01E01.mkv", folder / "Bar - S01E01.hi.srt", folder / "Bar - S01E01.nl.srt"
+    old.write_text("1\n00:00:01,000 --> 00:00:02,000\nold\n")
+    env.db.upsert_subtitle(str(old), str(video), status="reverted")
+
+    class Renaming(SilentClient):
+        def replace(self, video, subtitle_path, language, hi=False, forced=False):
+            import os
+            os.unlink(subtitle_path)
+            new.write_text("1\n00:00:05,000 --> 00:00:06,000\nnew\n")
+            return super().replace(video, subtitle_path, language, hi, forced)
+
+    fake = Renaming()
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+    job = env.jobs.Job(kind="heal")
+    run(env.jobs.heal_job(job))
+
+    assert job.totals["healed"] == 1
+    assert not old.exists(), "the original must not be put back beside its replacement"
+    assert env.db.get_subtitle(str(old)) is None
+    assert env.db.get_subtitle(str(new))["status"] in ("ok", "fixed")
+
+
+def test_automatic_heal_leaves_alass_failures_alone(env, monkeypatch):
+    """alass crashing or timing out says nothing about the subtitle; never delete over it."""
+    heal_settings(env)
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="failed")
+    fake = DeletingClient()
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+    run(env.jobs.heal_job(env.jobs.Job(kind="heal")))
+    assert fake.calls == 0
+    assert env.subtitle.exists()
+
+
+def test_automatic_heal_does_not_retry_what_it_gave_up_on(env, monkeypatch):
+    """Otherwise every sweep blacklists whatever Bazarr fetched since, forever."""
+    heal_settings(env)
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="reverted")
+    fake = DeletingClient()
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+    run(env.jobs.heal_job(env.jobs.Job(kind="heal")))
+    run(env.jobs.heal_job(env.jobs.Job(kind="heal")))
+    assert fake.calls == 1
+    # asking explicitly, from the dashboard, still works
+    run(env.jobs.heal_job(env.jobs.Job(kind="heal"), [str(env.subtitle)]))
+    assert fake.calls == 2
+
+
+def test_the_sweep_skips_subtitles_already_verified(env):
+    """Re-aligning 400 good subtitles every night finds nothing and rewrites them all."""
+    run(env.jobs.scan_job(env.jobs.Job(kind="scan")))
+    for row in env.db.list_subtitles(limit=100):
+        env.db.upsert_subtitle(row["path"], row["video"], status="ok")
+    run(env.jobs.full_job(env.jobs.Job(kind="full")))
+    assert not (env.tmp / "calls").exists(), "alass should not have run at all"

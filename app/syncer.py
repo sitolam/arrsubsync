@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -11,7 +12,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from app import alass, config, db
 from app.alass import logx
@@ -19,6 +20,25 @@ from app.shifts import describe, worst_shift
 
 _semaphore: asyncio.Semaphore | None = None
 _semaphore_size = 0
+
+# Below this alass is reporting rounding, not a correction.
+NOISE_SECONDS = 0.05
+
+_locks: dict[str, list] = {}
+
+
+@contextlib.asynccontextmanager
+async def exclusive(path: Path) -> AsyncIterator[None]:
+    """One sync per subtitle at a time: Bazarr's hook and a sweep can both reach the same file."""
+    entry = _locks.setdefault(str(path), [asyncio.Lock(), 0])
+    entry[1] += 1
+    try:
+        async with entry[0]:
+            yield
+    finally:
+        entry[1] -= 1
+        if entry[1] == 0:
+            _locks.pop(str(path), None)
 
 
 def semaphore(size: int) -> asyncio.Semaphore:
@@ -149,6 +169,12 @@ async def sync(video_raw: str, subtitle_raw: str, *, dry_run: bool = False,
     if video == subtitle:
         raise Rejected("video and subtitle are the same file")
 
+    async with exclusive(subtitle):
+        return await _sync(video, subtitle, settings, overrides, request_id, started, dry_run)
+
+
+async def _sync(video: Path, subtitle: Path, settings: dict[str, Any], overrides: dict[str, Any],
+                request_id: str, started: float, dry_run: bool) -> Result:
     timeout = float(overrides.get("timeout") or settings["alass_timeout"])
     # alass decides the output format from the extension, so it must be kept.
     output = subtitle.parent / f".arrsubsync-{request_id}{subtitle.suffix}"
@@ -184,6 +210,12 @@ async def sync(video_raw: str, subtitle_raw: str, *, dry_run: bool = False,
     if dry_run:
         output.unlink(missing_ok=True)
         return _finish(result, started, subtitle, video, record=False)
+
+    if result.applied_shift <= NOISE_SECONDS:
+        # Already in sync. alass still writes its own rendering of the file,
+        # and installing that would only churn the mtime every sweep.
+        output.unlink(missing_ok=True)
+        return _finish(result, started, subtitle, video)
 
     back_up(subtitle, settings)
     keep = subtitle.parent / f".arrsubsync-original-{request_id}{subtitle.suffix}"
@@ -223,6 +255,12 @@ async def sync(video_raw: str, subtitle_raw: str, *, dry_run: bool = False,
                         f"another {describe(result.residual)}. The subtitle does not match this "
                         "audio, so the original was restored."
                     )
+                elif result.residual > NOISE_SECONDS and result.residual >= result.applied_shift / 2:
+                    # It moved the subtitle and now wants most of that move back:
+                    # alass cannot tell the two positions apart, so neither is a
+                    # correction. Keep the file the user already had.
+                    shutil.copy2(keep, subtitle)
+                    result.replaced = False
         except Exception as exc:  # noqa: BLE001 - a failed check must never lose the file
             check.unlink(missing_ok=True)
             logx(logging.WARNING, "verification could not run", request_id=request_id, error=repr(exc))
@@ -256,7 +294,7 @@ def record_result(result: Result, subtitle: Path, video: Path) -> None:
         return
 
     if result.status == "ok":
-        status = db.FIXED if (result.applied_shift or 0) > 0.05 else db.OK
+        status = db.FIXED if result.replaced else db.OK
     elif result.status == "reverted":
         status = db.REVERTED
     else:

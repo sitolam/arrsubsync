@@ -9,6 +9,12 @@ from typing import Iterator
 
 from app import config
 
+# Filename tags that describe a subtitle rather than name its language. `hi` in
+# particular is also the code for Hindi, and a file named Foo.hi.srt is far more
+# likely a hearing-impaired subtitle in the profile's language.
+FLAG_TAGS = {"hi", "sdh", "cc", "forced", "default", "foreign"}
+HI_TAGS = {"hi", "sdh", "cc"}
+
 
 @dataclass(frozen=True)
 class Pair:
@@ -29,9 +35,17 @@ class Pair:
     @property
     def language(self) -> str | None:
         for tag in self.tags:
-            if len(tag) in (2, 3) and tag.isalpha():
+            if len(tag) in (2, 3) and tag.isalpha() and tag.lower() not in FLAG_TAGS:
                 return tag.lower()
         return None
+
+    @property
+    def hi(self) -> bool:
+        return any(t.lower() in HI_TAGS for t in self.tags)
+
+    @property
+    def forced(self) -> bool:
+        return any(t.lower() == "forced" for t in self.tags)
 
 
 def find_pairs(root: Path) -> Iterator[Pair]:
@@ -50,6 +64,22 @@ def find_pairs(root: Path) -> Iterator[Pair]:
                 # The dot stops `Foo.mkv` claiming `Foo Part 2.srt`.
                 if sub_name.startswith(stem + "."):
                     yield Pair(directory / video_name, directory / sub_name)
+
+
+def subtitles_beside(video: Path) -> dict[Path, float]:
+    """Every subtitle belonging to `video`, with its mtime."""
+    found = {}
+    directory = video.parent
+    if not directory.is_dir():
+        return found
+    for name in os.listdir(directory):
+        path = directory / name
+        if path.suffix.lower() in config.SUBTITLE_SUFFIXES and name.startswith(video.stem + "."):
+            try:
+                found[path] = path.stat().st_mtime
+            except OSError:
+                pass
+    return found
 
 
 def video_for(subtitle: Path) -> Path | None:

@@ -151,10 +151,13 @@ async def sync_endpoint(req: SyncRequest) -> JSONResponse:
             content={"status": "error", "error": exc.message, "field": exc.field},
         )
 
-    # A subtitle that cannot be aligned is a job for Bazarr, not for alass.
-    if result.status in ("reverted", "failed") and db.get_setting("auto_replace"):
+    # A subtitle that verifiably does not match the audio is a job for Bazarr.
+    # alass failing outright is not evidence against the subtitle.
+    if result.status == "reverted" and db.get_setting("auto_replace"):
         if not jobs.runner.busy:
-            jobs.runner.start("heal", lambda job: jobs.heal_job(job, [result.subtitle]))
+            jobs.runner.start(
+                "heal", lambda job: jobs.heal_job(job, [result.subtitle], automatic=True)
+            )
             result.details["auto_replace"] = "queued a replacement through Bazarr"
 
     return JSONResponse(status_code=result.http_status, content=result.as_dict())
