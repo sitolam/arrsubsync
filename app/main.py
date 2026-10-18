@@ -41,7 +41,7 @@ async def lifespan(_: FastAPI):
 app = FastAPI(
     lifespan=lifespan,
     title="arrsubsync",
-    version="2.0.0",
+    version="2.1.1",
     description="Subtitle synchronisation for *arr stacks, powered by alass.",
     docs_url="/api/docs",
     openapi_url="/api/openapi.json",
