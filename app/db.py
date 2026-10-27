@@ -68,7 +68,8 @@ OFF = "off"             # out of sync, not yet corrected
 REVERTED = "reverted"   # correction did not converge; original restored
 FAILED = "failed"       # alass could not align it at all
 UNKNOWN = "unknown"     # not checked yet
-BAD = (REVERTED, FAILED)
+INCOMPLETE = "incomplete"  # in sync, but long stretches of the video have no lines
+BAD = (REVERTED, FAILED, INCOMPLETE)
 
 
 def connect() -> sqlite3.Connection:
@@ -232,11 +233,11 @@ def counts() -> dict[str, int]:
     rows = connect().execute(
         "SELECT status, COUNT(*) AS n FROM subtitles WHERE ignored = 0 GROUP BY status"
     )
-    out = {OK: 0, FIXED: 0, OFF: 0, REVERTED: 0, FAILED: 0, UNKNOWN: 0}
+    out = {OK: 0, FIXED: 0, OFF: 0, REVERTED: 0, FAILED: 0, INCOMPLETE: 0, UNKNOWN: 0}
     for row in rows:
         out[row["status"]] = row["n"]
     out["total"] = sum(out.values())
-    out["needs_replacement"] = out[REVERTED] + out[FAILED]
+    out["needs_replacement"] = out[REVERTED] + out[FAILED] + out[INCOMPLETE]
     out["in_sync"] = out[OK] + out[FIXED]
     return out
 
@@ -247,15 +248,15 @@ def list_subtitles(status: str | None = None, limit: int = 200, offset: int = 0,
     params: list[Any] = []
     if status and status != "all":
         if status == "problem":
-            sql += " AND status IN (?, ?, ?)"
-            params += [REVERTED, FAILED, OFF]
+            sql += " AND status IN (?, ?, ?, ?)"
+            params += [REVERTED, FAILED, INCOMPLETE, OFF]
         else:
             sql += " AND status = ?"
             params.append(status)
     if search:
         sql += " AND path LIKE ?"
         params.append(f"%{search}%")
-    sql += " ORDER BY (status IN ('reverted','failed')) DESC, checked_at DESC LIMIT ? OFFSET ?"
+    sql += " ORDER BY (status IN ('reverted','failed','incomplete')) DESC, checked_at DESC LIMIT ? OFFSET ?"
     params += [limit, offset]
     return [dict(r) for r in connect().execute(sql, params)]
 

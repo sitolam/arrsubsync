@@ -131,6 +131,7 @@ tr:hover td { background: rgba(255,255,255,.02); }
 .tag.fixed { background: rgba(79,156,249,.12); color: var(--accent); }
 .tag.off { background: rgba(210,153,34,.14); color: var(--warn); }
 .tag.reverted { background: rgba(248,81,73,.12); color: var(--bad); }
+.tag.incomplete { background: rgba(210,153,34,.15); color: var(--warn); }
 .tag.failed { background: rgba(248,81,73,.2); color: var(--bad); }
 .tag.unknown { background: var(--panel-2); color: var(--muted); }
 .chart { display: flex; align-items: flex-end; gap: 4px; height: 90px; }
@@ -220,7 +221,7 @@ DASHBOARD = """<!doctype html><html><head><meta charset="utf-8">
       <select id="statusFilter" style="max-width:180px" onchange="loadRows()">
         <option value="all">Every status</option><option value="ok">In sync</option>
         <option value="fixed">Corrected</option><option value="off">Out of sync</option>
-        <option value="reverted">Reverted</option><option value="failed">Failed</option>
+        <option value="reverted">Reverted</option><option value="incomplete">Incomplete</option><option value="failed">Failed</option>
         <option value="unknown">Not checked</option>
       </select>
     </div>
@@ -239,7 +240,7 @@ DASHBOARD = """<!doctype html><html><head><meta charset="utf-8">
     <h2>Automation</h2>
     <div class="settings">
       <div class="field"><label class="switch"><input type="checkbox" id="set_auto_replace"> Replace subtitles that cannot be fixed</label>
-        <div class="hint">When a subtitle verifiably does not match the audio, blacklist it in Bazarr and fetch another, then sync that. Repeats until it sticks. If nothing replaces it, the original is put back; a copy is always kept in /config/replaced.</div></div>
+        <div class="hint">When a subtitle verifiably does not match the audio, or has whole stretches without lines, blacklist it in Bazarr and fetch another, then sync that. Repeats until it sticks. If nothing replaces it, the original is put back; a copy is always kept in /config/replaced.</div></div>
       <div class="field"><label class="switch"><input type="checkbox" id="set_schedule_enabled"> Run a full sweep on a schedule</label>
         <div class="hint">Indexes the library, checks new and changed subtitles, then heals what it cannot fix.</div></div>
       <div class="field"><label>Hours between sweeps</label><input type="number" id="set_schedule_hours" min="0.25" step="0.25"></div>

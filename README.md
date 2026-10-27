@@ -204,6 +204,13 @@ So every sync that touches a file is verified:
   then 0.3s the other), neither position is better: the original is kept as it was.
 - A subtitle alass finds already in sync is never rewritten, so its file keeps its mtime.
 
+**In sync is not the same as complete.** alass aligns whatever lines a subtitle has, so
+a file missing its first ten minutes still syncs perfectly. After every sync, and on every
+scan, the cue timings are checked against the video's length: nothing for the first 6
+minutes, a 10-minute hole, or an ending missing well beyond the credits marks the subtitle
+**incomplete**. It is healed like a reverted one, but a replacement is only kept if it
+covers more of the video; otherwise the original goes back.
+
 ```json
 {
   "status": "reverted",

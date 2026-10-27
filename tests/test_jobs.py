@@ -253,3 +253,57 @@ def test_the_sweep_skips_subtitles_already_verified(env):
         env.db.upsert_subtitle(row["path"], row["video"], status="ok")
     run(env.jobs.full_job(env.jobs.Job(kind="full")))
     assert not (env.tmp / "calls").exists(), "alass should not have run at all"
+
+
+def lines_from(start, end):
+    return "\n".join(f"{i}\n00:{t // 60:02d}:{t % 60:02d},000 --> 00:{t // 60:02d}:{t % 60:02d},900\nx\n"
+                     for i, t in enumerate(range(start, end, 20), 1))
+
+
+class Writing(SilentClient):
+    """Bazarr deleting the subtitle and downloading `content` in its place."""
+
+    def __init__(self, path, content):
+        super().__init__()
+        self.path, self.content = path, content
+
+    def replace(self, video, subtitle_path, language, hi=False, forced=False):
+        import os
+        os.unlink(subtitle_path)
+        self.path.write_text(self.content)
+        return super().replace(video, subtitle_path, language, hi, forced)
+
+
+def test_heal_swaps_an_incomplete_subtitle_for_a_complete_one(env, monkeypatch):
+    monkeypatch.setenv("STUB_MODE", "zero")
+    monkeypatch.setattr(env.syncer.coverage, "duration", lambda video: 3540.0)
+    heal_settings(env)
+    env.subtitle.write_text(lines_from(632, 3500))
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="incomplete")
+    fake = Writing(env.subtitle, lines_from(30, 3500))
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+
+    job = env.jobs.Job(kind="heal")
+    run(env.jobs.heal_job(job))
+    assert job.totals["healed"] == 1
+    assert env.subtitle.read_text().startswith("1\n00:00:30")
+
+
+def test_heal_keeps_the_original_over_a_replacement_no_better(env, monkeypatch):
+    """A replacement missing the same ten minutes is no improvement; put back what was there."""
+    monkeypatch.setenv("STUB_MODE", "zero")
+    monkeypatch.setattr(env.syncer.coverage, "duration", lambda video: 3540.0)
+    heal_settings(env, max_replace_attempts=1)
+    original = lines_from(632, 3500)
+    env.subtitle.write_text(original)
+    env.db.upsert_subtitle(str(env.subtitle), str(env.video), status="incomplete")
+    other = env.subtitle.with_name("Foo (2019).nl.srt")
+    other.unlink()
+    fake = Writing(other, lines_from(640, 3500))
+    monkeypatch.setattr(env.jobs.bazarr.Bazarr, "from_settings", classmethod(lambda cls: fake))
+
+    job = env.jobs.Job(kind="heal")
+    run(env.jobs.heal_job(job))
+    assert job.totals["healed"] == 0
+    assert env.subtitle.read_text() == original
+    assert not other.exists(), "the worse replacement must not sit beside the original"

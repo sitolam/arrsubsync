@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from app import bazarr, config, db, scanner, syncer
+from app import bazarr, config, coverage, db, scanner, syncer
 from app.alass import logx
 from app.shifts import describe
 
@@ -114,6 +114,7 @@ async def scan_job(job: Job, root: Path | None = None) -> None:
     pairs = collect(root)
     job.total = len(pairs)
     seen = []
+    durations: dict[Path, float | None] = {}
     for pair in pairs:
         if job.cancelled:
             break
@@ -123,10 +124,19 @@ async def scan_job(job: Job, root: Path | None = None) -> None:
         existing = db.get_subtitle(str(pair.subtitle))
         st = pair.subtitle.stat()
         changed = not existing or existing["size"] != st.st_size or existing["mtime"] != st.st_mtime
+        fields: dict[str, Any] = {"status": db.UNKNOWN} if changed else {}
+        if not changed and not pair.forced and existing["status"] in (db.OK, db.FIXED, db.INCOMPLETE):
+            # Cheap, and catches subtitles verified before completeness was checked.
+            if pair.video not in durations:
+                durations[pair.video] = coverage.duration(pair.video)
+            report = coverage.measure(pair.subtitle, durations[pair.video])
+            if report.incomplete and existing["status"] != db.INCOMPLETE:
+                fields = {"status": db.INCOMPLETE, "note": report.describe()}
+            elif not report.incomplete and existing["status"] == db.INCOMPLETE:
+                fields = {"status": db.OK, "note": None}
         db.upsert_subtitle(
             str(pair.subtitle), str(pair.video),
-            language=pair.language, size=st.st_size, mtime=st.st_mtime,
-            **({"status": db.UNKNOWN} if changed else {}),
+            language=pair.language, size=st.st_size, mtime=st.st_mtime, **fields,
         )
         if job.done % 200 == 0:
             await asyncio.sleep(0)
@@ -155,7 +165,7 @@ async def check_job(job: Job, *, apply: bool, only: list[str] | None = None,
             pairs = [p for p in pairs if str(p.subtitle) in wanted_paths]
 
     job.total = len(pairs)
-    totals = {"ok": 0, "fixed": 0, "off": 0, "reverted": 0, "failed": 0}
+    totals = {"ok": 0, "fixed": 0, "off": 0, "incomplete": 0, "reverted": 0, "failed": 0}
     workers = max(1, int(settings["max_concurrency"]))
     queue: asyncio.Queue[scanner.Pair] = asyncio.Queue()
     for pair in pairs:
@@ -167,18 +177,21 @@ async def check_job(job: Job, *, apply: bool, only: list[str] | None = None,
             job.current = pair.subtitle.name
             try:
                 result = await syncer.sync(str(pair.video), str(pair.subtitle), dry_run=not apply)
-                if result.status == "ok":
+                if result.status in ("ok", "incomplete"):
                     if apply:
-                        totals["fixed" if result.replaced else "ok"] += 1
+                        key = "incomplete" if result.status == "incomplete" else (
+                            "fixed" if result.replaced else "ok")
+                        totals[key] += 1
                     else:
                         shift = result.applied_shift or 0
                         threshold = float(settings["verify_threshold"])
-                        key = "off" if shift > threshold else "ok"
+                        key = "off" if shift > threshold else result.status
                         totals[key] += 1
                         db.upsert_subtitle(
                             str(pair.subtitle), str(pair.video),
-                            status=db.OFF if key == "off" else db.OK,
+                            status={"off": db.OFF, "ok": db.OK, "incomplete": db.INCOMPLETE}[key],
                             summary=result.summary, worst_shift=shift, checked_at=time.time(),
+                            **({"note": result.error} if key == "incomplete" else {}),
                         )
                 else:
                     totals[result.status] += 1
@@ -233,10 +246,12 @@ def heal_targets(paths: list[str] | None, automatic: bool) -> list[dict[str, Any
     if paths:
         rows = [r for r in (db.get_subtitle(p) for p in paths) if r]
     else:
-        # Only a verified mismatch is evidence the subtitle is wrong. alass
+        # Only a verified mismatch, or whole stretches with no lines, is
+        # evidence the subtitle is wrong. alass
         # failing - a timeout, an audio track it cannot read - says nothing
         # about the subtitle, and is no reason to delete it.
-        rows = [r for r in db.list_subtitles(status=db.REVERTED, limit=100000) if not r["ignored"]]
+        rows = [r for r in db.list_subtitles(status="all", limit=100000)
+                if r["status"] in (db.REVERTED, db.INCOMPLETE) and not r["ignored"]]
     if not automatic:
         return rows
 
@@ -294,9 +309,14 @@ async def heal_one(job: Job, client: bazarr.Bazarr, row: dict[str, Any], setting
     language = pair.language or stored or "en"
     owner = subtitle.stat()
     saved = keep_copy(subtitle)
+    # What a replacement has to beat. A subtitle that does not match the audio
+    # at all loses to anything that syncs; an incomplete one only to a more
+    # complete one.
+    baseline = (coverage.check(video, subtitle).missing if row["status"] == db.INCOMPLETE
+                else float("inf"))
 
     current = subtitle
-    healed = unavailable = False
+    healed = unavailable = arrived_any = False
     refused = None
     max_attempts = int(settings["max_replace_attempts"])
     wait = float(settings["replace_wait_seconds"])
@@ -332,6 +352,7 @@ async def heal_one(job: Job, client: bazarr.Bazarr, row: dict[str, Any], setting
                     unavailable = True
                 break
 
+            arrived_any = True
             await asyncio.sleep(2)     # let the writer finish
             if arrived != current and not current.exists():
                 db.forget(str(current))
@@ -342,21 +363,29 @@ async def heal_one(job: Job, client: bazarr.Bazarr, row: dict[str, Any], setting
                 db.log_event("heal", exc.message, level="warning", path=str(current))
                 continue
 
-            if result.status == "ok":
+            better = (result.status == "incomplete"
+                      and result.details.get("missing_seconds", float("inf")) < baseline - 60)
+            if result.status == "ok" or better:
                 healed = True
                 totals["healed"] += 1
                 db.log_event(
                     "heal",
-                    f"fixed after {attempt} replacement(s): {describe(result.applied_shift or 0)}",
+                    f"fixed after {attempt} replacement(s): {describe(result.applied_shift or 0)}"
+                    + (f", still {result.error}" if better else ""),
                     path=str(current),
                 )
                 break
     finally:
-        if not current.exists():
+        # Unless a replacement proved better, the user keeps what they had:
+        # put the original back, and take away a worse file beside it.
+        if not healed and (arrived_any or not current.exists()):
+            if current != subtitle and current.exists():
+                current.unlink()
+                db.forget(str(current))
             restore(saved, subtitle, owner)
             current = subtitle
             totals["restored"] += 1
-            db.log_event("heal", "nothing replaced it, so the original was put back",
+            db.log_event("heal", "no replacement was better, so the original was put back",
                          level="warning", path=str(subtitle))
 
     if not healed and not job.cancelled:

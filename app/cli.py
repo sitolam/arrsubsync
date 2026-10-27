@@ -45,7 +45,7 @@ def print_status() -> None:
     print(f"library      : {counts['total']} subtitles tracked")
     print(f"in sync      : {counts['in_sync']}  (ok {counts['ok']}, corrected {counts['fixed']})")
     print(f"out of sync  : {counts['off']}")
-    print(f"unfixable    : {counts['needs_replacement']}  (reverted {counts['reverted']}, failed {counts['failed']})")
+    print(f"unfixable    : {counts['needs_replacement']}  (reverted {counts['reverted']}, incomplete {counts['incomplete']}, failed {counts['failed']})")
     print(f"not checked  : {counts['unknown']}")
     print(f"corrections  : {stats['corrected']} subtitles, {stats['seconds_corrected']}s of drift removed")
     print(f"replacements : {stats['replacements']} fetched from Bazarr")
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(job.totals))
     else:
         print(f"{args.command} finished: " + ", ".join(f"{v} {k}" for k, v in job.totals.items()))
-    bad = job.totals.get("reverted", 0) + job.totals.get("failed", 0) + job.totals.get("gave_up", 0)
+    bad = job.totals.get("reverted", 0) + job.totals.get("incomplete", 0) + job.totals.get("failed", 0) + job.totals.get("gave_up", 0)
     return 1 if bad else 0
 
 

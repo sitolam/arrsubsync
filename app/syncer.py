@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from app import alass, config, db
+from app import alass, config, coverage, db
 from app.alass import logx
 from app.shifts import describe, worst_shift
 
@@ -61,7 +61,7 @@ class Rejected(Exception):
 
 @dataclass
 class Result:
-    status: str                      # ok | reverted | failed | rejected
+    status: str                      # ok | incomplete | reverted | failed | rejected
     subtitle: str
     video: str
     request_id: str
@@ -76,7 +76,7 @@ class Result:
 
     @property
     def http_status(self) -> int:
-        return {"ok": 200, "rejected": 400, "reverted": 409, "failed": 502}.get(self.status, 500)
+        return {"ok": 200, "incomplete": 200, "rejected": 400, "reverted": 409, "failed": 502}.get(self.status, 500)
 
     def as_dict(self) -> dict[str, Any]:
         body = {
@@ -274,6 +274,15 @@ async def _sync(video: Path, subtitle: Path, settings: dict[str, Any], overrides
 
 def _finish(result: Result, started: float, subtitle: Path, video: Path,
             record: bool = True) -> Result:
+    if result.status == "ok":
+        # In sync is not the same as complete: alass aligns whatever lines
+        # there are, and is just as happy with a file missing ten minutes.
+        report = coverage.check(video, subtitle)
+        if report.incomplete:
+            result.status = "incomplete"
+            result.error = report.describe()
+            result.details["missing_seconds"] = round(report.missing, 1)
+
     result.duration = time.monotonic() - started
 
     level = logging.INFO if result.status == "ok" else logging.WARNING
@@ -295,6 +304,8 @@ def record_result(result: Result, subtitle: Path, video: Path) -> None:
 
     if result.status == "ok":
         status = db.FIXED if result.replaced else db.OK
+    elif result.status == "incomplete":
+        status = db.INCOMPLETE
     elif result.status == "reverted":
         status = db.REVERTED
     else:
@@ -309,9 +320,11 @@ def record_result(result: Result, subtitle: Path, video: Path) -> None:
         "mtime": st.st_mtime,
         "checked_at": time.time(),
     }
-    if status == db.FIXED:
+    if result.replaced:
         fields["applied_shift"] = result.applied_shift
         fields["fixed_at"] = time.time()
+    if status == db.INCOMPLETE:
+        fields["note"] = result.error
 
     db.upsert_subtitle(str(subtitle), str(video), **fields)
     db.bump(str(subtitle), "attempts")
@@ -319,6 +332,7 @@ def record_result(result: Result, subtitle: Path, video: Path) -> None:
     message = {
         db.FIXED: f"corrected by {describe(result.applied_shift or 0)}",
         db.OK: "already in sync",
+        db.INCOMPLETE: f"in sync, but incomplete: {result.error}",
         db.REVERTED: "could not be aligned; original restored",
         db.FAILED: result.error or "alass failed",
     }[status]
