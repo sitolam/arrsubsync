@@ -72,11 +72,23 @@ def summarise(text: str) -> str | None:
     return " | ".join(lines)
 
 
+# alass reads subtitles as UTF-8 unless told otherwise. Older Western European
+# subtitles are often Windows-1252, which it rejects with this message.
+CHARSET_ERROR = "wrong charset encoding"
+FALLBACK_ENCODING = "windows-1252"
+
+
+def charset_error(*texts: str) -> bool:
+    return any(CHARSET_ERROR in text for text in texts)
+
+
 def build_argv(video: Path, subtitle: Path, output: Path, settings: dict[str, Any],
-               overrides: dict[str, Any] | None = None) -> list[str]:
+               overrides: dict[str, Any] | None = None, *, encoding: str | None = None) -> list[str]:
     opts = dict(settings)
     opts.update({k: v for k, v in (overrides or {}).items() if v is not None})
     argv = [config.ALASS_BIN, str(video), str(subtitle), str(output)]
+    if encoding:
+        argv += ["--encoding-inc", encoding]
 
     if opts.get("alass_no_split"):
         argv.append("--no-split")          # alass spells it singular
@@ -103,6 +115,18 @@ async def run(argv: list[str], timeout: float) -> tuple[int, str, str]:
         clean_output(stdout.decode("utf-8", "replace")),
         clean_output(stderr.decode("utf-8", "replace")),
     )
+
+
+async def run_sync(video: Path, subtitle: Path, output: Path, settings: dict[str, Any],
+                   overrides: dict[str, Any] | None, timeout: float) -> tuple[int, str, str, list[str]]:
+    """Run alass, retrying as Windows-1252 when the subtitle is not UTF-8."""
+    argv = build_argv(video, subtitle, output, settings, overrides)
+    code, stdout, stderr = await run(argv, timeout)
+    if code != 0 and charset_error(stdout, stderr):
+        output.unlink(missing_ok=True)
+        argv = build_argv(video, subtitle, output, settings, overrides, encoding=FALLBACK_ENCODING)
+        code, stdout, stderr = await run(argv, timeout)
+    return code, stdout, stderr, argv
 
 
 def available() -> dict[str, Any]:

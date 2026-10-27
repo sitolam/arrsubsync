@@ -187,7 +187,11 @@ async def _sync(video: Path, subtitle: Path, settings: dict[str, Any], overrides
 
     try:
         async with semaphore(int(settings["max_concurrency"])):
-            code, stdout, stderr = await alass.run(argv, timeout)
+            code, stdout, stderr, used = await alass.run_sync(
+                video, subtitle, output, settings, overrides, timeout)
+        if used != argv:
+            logx(logging.INFO, "subtitle is not UTF-8, read it as "
+                 f"{alass.FALLBACK_ENCODING}", request_id=request_id, argv=used)
     except asyncio.TimeoutError:
         output.unlink(missing_ok=True)
         result.status, result.error = "failed", f"alass timed out after {timeout:g}s and was killed"
@@ -239,9 +243,8 @@ async def _sync(video: Path, subtitle: Path, settings: dict[str, Any], overrides
         check = subtitle.parent / f".arrsubsync-verify-{request_id}{subtitle.suffix}"
         try:
             async with semaphore(int(settings["max_concurrency"])):
-                vcode, vout, verr = await alass.run(
-                    alass.build_argv(video, subtitle, check, settings, overrides), timeout
-                )
+                vcode, vout, verr, _ = await alass.run_sync(
+                    video, subtitle, check, settings, overrides, timeout)
             check.unlink(missing_ok=True)
             if vcode == 0:
                 result.verify_summary = alass.summarise(vout) or alass.summarise(verr)

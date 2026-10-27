@@ -203,6 +203,8 @@ So every sync that touches a file is verified:
 - If the second pass wants most of the move back (alass nudging a subtitle 0.3s one way,
   then 0.3s the other), neither position is better: the original is kept as it was.
 - A subtitle alass finds already in sync is never rewritten, so its file keeps its mtime.
+- alass reads subtitles as UTF-8. One it cannot decode (older Dutch and other Western
+  European releases are often Windows-1252) is retried as Windows-1252 instead of failing.
 
 **In sync is not the same as complete.** alass aligns whatever lines a subtitle has, so
 a file missing its first ten minutes still syncs perfectly. After every sync, and on every

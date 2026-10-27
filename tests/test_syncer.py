@@ -76,6 +76,23 @@ def test_alass_failure_is_reported_and_the_file_is_untouched(env, monkeypatch):
     assert env.subtitle.read_text() == before
 
 
+def test_a_windows_1252_subtitle_is_retried_with_that_encoding(env, monkeypatch):
+    """alass reads UTF-8 only by default; older Dutch subtitles are often cp1252."""
+    monkeypatch.setenv("STUB_MODE", "charset")
+    seen = []
+    original = env.syncer.alass.run
+
+    async def spy(argv, timeout):
+        seen.append(argv)
+        return await original(argv, timeout)
+
+    monkeypatch.setattr(env.syncer.alass, "run", spy)
+    result = run(env.syncer.sync(str(env.video), str(env.subtitle)))
+    assert result.status == "ok" and result.replaced is True
+    assert "--encoding-inc" not in seen[0]
+    assert seen[1][-2:] == ["--encoding-inc", "windows-1252"]
+
+
 def test_empty_output_is_never_installed(env, monkeypatch):
     monkeypatch.setenv("STUB_MODE", "empty")
     before = env.subtitle.read_text()

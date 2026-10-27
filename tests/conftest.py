@@ -17,6 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 STUB = """#!/bin/sh
 case "$STUB_MODE" in
   fail)  echo "error: could not guess framerate" >&2; exit 1 ;;
+  charset) case "$*" in *--encoding-inc*) STUB_MODE= ;;
+           *) echo "error while decoding subtitle from bytes to string (wrong charset encoding?)" >&2
+              exit 1 ;; esac ;;
   hang)  sleep 30 ;;
   empty) : > "$3"; exit 0 ;;
   drift) echo "shifted block of 9 subtitles with length 0:40:00.000 by -0:04:51.628"
